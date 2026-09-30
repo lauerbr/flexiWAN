@@ -1119,7 +1119,6 @@ class FwModem(FwLinuxModem):
                 registration_error = self._get_registration_state().get('network_error')
                 if registration_error != 'unknown':
                     raise Exception(f'Registration error {registration_error}')
-                    # self.log.debug(f'scan_available_networks(): Registration error {registration_error} for operator {operator_code}')
 
                 signal = self._get_signal()
                 signal_number = self._convert_signal_to_number(signal)

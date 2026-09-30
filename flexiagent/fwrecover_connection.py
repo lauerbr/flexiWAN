@@ -22,7 +22,6 @@
 
 import enum
 import json
-import os
 import time
 
 import fwglobals

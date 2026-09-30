@@ -30,7 +30,6 @@ import fwsystem_checker_common
 
 globals = os.path.join(os.path.dirname(os.path.realpath(__file__)) , '..' , '..')
 sys.path.append(globals)
-import fwutils
 
 class Checker(fwsystem_checker_common.Checker):
     """This is Checker class representation.
@@ -190,7 +189,6 @@ class Checker(fwsystem_checker_common.Checker):
                 raise Exception("not supported format in %s (out=%s)" % (autoupgrade_file, out))
             except subprocess.CalledProcessError:
                 raise Exception("not found")
-            return False
 
         def _set_autoupgrade_param(param, val):
             # Firstly remove parameter from file if exist.

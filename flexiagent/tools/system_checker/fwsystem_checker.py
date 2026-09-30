@@ -36,7 +36,6 @@
 import os
 import subprocess
 
-import getopt
 import importlib
 import distro
 import sys
@@ -375,7 +374,7 @@ if __name__ == '__main__':
         # If we reached this point, i.e. if no exception occurred, the vpp pid was found
         print ("error: cannot run fwsystem_checker when the router is running, please stop router first")
         sys.exit(FW_EXIT_CODE_OK)
-    except Exception as e:
+    except Exception:
         pass
 
 

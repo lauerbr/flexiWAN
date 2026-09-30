@@ -24,7 +24,7 @@ import copy
 import ipaddress
 import socket
 
-from netaddr import *
+from netaddr import EUI, IPAddress, IPNetwork, mac_unix_expanded
 
 import fwglobals
 import fwlte
@@ -1192,8 +1192,6 @@ def _add_ikev2_certificates(cmd_list, remote_device_id, certificate):
 
     :returns: None.
     """
-    machine_id = fwutils.get_machine_id()
-
     # ikev2.api.json: ikev2_set_local_key (...)
     cmd = {}
     cmd['cmd'] = {}

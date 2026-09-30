@@ -24,7 +24,6 @@ import subprocess
 
 import fwutils
 
-from fwobject import FwObject
 
 class FwGrub:
     '''Wrapper for all GRUB related activities.

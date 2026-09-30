@@ -19,8 +19,8 @@
 ################################################################################
 
 import copy
-from netaddr import *
-from subprocess import Popen, PIPE, STDOUT, DEVNULL
+from netaddr import IPNetwork
+from subprocess import Popen, PIPE, DEVNULL
 import fw_input_validation
 import fwglobals
 import fwutils

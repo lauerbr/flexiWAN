@@ -21,14 +21,11 @@
 ################################################################################
 
 import fwglobals
-import fwroutes
 import fwthread
 import fwutils
 import fw_redact
-import fw_os_utils
 
 import queue
-from functools import partial
 import traceback
 import re
 

@@ -20,16 +20,9 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 
-import json
-import re
-import traceback
-import copy
 
 from fwcfg_database import FwCfgDatabase
 
-import fwglobals
-import fwsystem_api
-import fwutils
 
 
 class FwSystemCfg(FwCfgDatabase):

@@ -181,7 +181,7 @@ class FwFrr(FwObject):
             ret, err_str = self.run_ospf_add(new_address, area)
             if not ret:
                 self.log.excep(f"ospf_network_update({dev_id}): failed to add new network '{new_address}' to frr: {err_str}")
-                new_network = None
+                new_address = None
 
         ospf_network['address'] = new_address
         self.db['ospf'] = ospf    # SqlDict can't handle in-memory modifications, so we have to replace whole top level dict

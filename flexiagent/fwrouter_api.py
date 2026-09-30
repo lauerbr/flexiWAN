@@ -26,12 +26,11 @@ import json
 import os
 import re
 import subprocess
-import threading
 import time
 import traceback
 
 from datetime import datetime
-from netaddr import IPAddress, IPNetwork
+from netaddr import IPNetwork
 
 import fwtranslate_add_firewall_policy
 import fwfirewall
@@ -47,16 +46,13 @@ import fwroutes
 import fwthread
 import fwtunnel_stats
 import fwutils
-import fwwifi
 import fwqos
 from fwcfg_request_handler import FwCfgRequestHandler
 from fwfrr import FwFrr
 from fwikev2 import FwIKEv2
 from fwmultilink import FwMultilink
-from fwpolicies import FwPolicies
 from fwroutes import FwLinuxRoutes
 from vpp_api import VPP_API
-from tools.common.fw_vpp_startupconf import FwStartupConf
 from fwcfg_request_handler import FwCfgMultiOpsWithRevert
 
 fwrouter_translators = {
@@ -1905,7 +1901,6 @@ class FWROUTER_API(FwCfgRequestHandler):
         """Handles post-VPP stop activities.
         :returns: None.
         """
-        self.router_stopping = False
 
         # keep LTE connectivity on linux interface
         fwglobals.g.system_api.restore_configuration(types=['add-lte'])
@@ -2104,7 +2099,6 @@ class FWROUTER_API(FwCfgRequestHandler):
         for msg in self.pending_cfg_db.dump():
             self.cfg_db.update(msg)
         self.pending_cfg_db.clean()
-        self.pending_interfaces = {}
 
         # Now fetch configuration items from database and configure them one by one.
         #

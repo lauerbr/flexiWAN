@@ -36,14 +36,11 @@ import math
 import time
 import os
 import psutil
-import re
-import subprocess
 import sys
 import yaml
 
 import fw_os_utils
 import fwglobals
-import fwlte
 import fwthread
 import fwutils
 import fwwifi

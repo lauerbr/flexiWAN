@@ -20,7 +20,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 
-import json
 import re
 import traceback
 import copy
@@ -28,9 +27,7 @@ import copy
 from netaddr import IPNetwork
 
 from fwcfg_database import FwCfgDatabase
-from fwroutes       import FwRoute, FwConditionalRoute
 
-import fwrouter_api
 import fwutils
 
 
@@ -159,39 +156,6 @@ class FwRouterCfg(FwCfgDatabase):
             elif dev_id and 'dev_id' in params and params['dev_id'] != dev_id:
                 continue
             result.append(params)
-        return result
-
-    def get_unconditional_routes(self):
-        result = []
-        routes = self.get_requests('add-route')
-        for r in routes:
-            if not r.get('condition'):
-                result.append(FwRoute(
-                                r['addr'],
-                                r['via'],
-                                r.get('dev'),
-                                proto   = 'static',
-                                metric  = int(r.get('metric', '0')),
-                                on_link = r.get('onLink', False),
-                                dev_id  = r.get('dev_id')
-                                ))
-        return result
-
-    def get_conditional_routes(self):
-        result = []
-        routes = self.get_requests('add-route')
-        for r in routes:
-            if r.get('condition'):
-                result.append(FwConditionalRoute(
-                                r['condition'],
-                                r['addr'],
-                                r['via'],
-                                r.get('dev'),
-                                proto   = 'static',
-                                metric  = int(r.get('metric', '0')),
-                                on_link = r.get('onLink', False),
-                                dev_id  = r.get('dev_id')
-                                ))
         return result
 
     def get_routing_filters(self):

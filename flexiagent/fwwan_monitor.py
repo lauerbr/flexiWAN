@@ -21,10 +21,8 @@
 ################################################################################
 
 import copy
-import re
 import time
 
-from urllib import parse as uparse
 
 import subprocess
 
@@ -364,7 +362,6 @@ class FwWanMonitor(FwObject):
 
         self.routes = fwglobals.g.cache.wan_monitor['enabled_routes']
         self.disabled_routes = fwglobals.g.cache.wan_monitor['disabled_routes']
-        self.route_rule_re   = re.compile(r"(\w+) via ([0-9.]+) dev (\w+)(.*)") #  'default via 20.20.20.22 dev enp0s9 proto dhcp metric 100'
         self.thread_wan_monitor = None
 
     def __enter__(self):

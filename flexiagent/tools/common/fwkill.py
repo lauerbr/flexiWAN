@@ -40,10 +40,7 @@ agent_root_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)) , '..'
 sys.path.append(agent_root_dir)
 import fwglobals
 import fwutils
-import fwnetplan
 import fwlte
-import fwpppoe
-import fwwifi
 
 def print_usage():
     print('Optional supported parameters:')
@@ -65,7 +62,7 @@ def parse_argv(argv):
                 arg_quiet = True
             elif opt == '--clean_cfg':
                 arg_clean_cfg = True
-    except getopt.GetoptError as err:
+    except getopt.GetoptError:
         print ("Unsupported command line option detected.")
         print_usage()
         sys.exit(-1)

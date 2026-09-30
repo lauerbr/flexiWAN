@@ -24,7 +24,6 @@ import subprocess
 import time
 
 from netaddr import IPNetwork
-from sqlitedict import SqliteDict
 
 from typing import Dict
 
@@ -596,10 +595,6 @@ class FwPppoeClient(FwObject):
     def _add_user(self, name, password):
         self.chap_config.add_user(name, password)
         self.pap_config.add_user(name, password)
-
-    def _remove_user(self, name):
-        self.chap_config.remove_user(name)
-        self.pap_config.remove_user(name)
 
     def _serialize_users_connections(self):
         """Create secrets and connections configuration files.

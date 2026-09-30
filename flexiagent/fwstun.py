@@ -1,11 +1,9 @@
-import threading
 import sys
 import os
 import fwglobals
 import fwtunnel_stats
 import fwutils
 import time
-import traceback
 
 import fwthread
 tools = os.path.join(os.path.dirname(os.path.realpath(__file__)) , 'tools')

@@ -30,7 +30,6 @@ def fwagent_signal_handler(signum, frame):
     exit(1)
 signal.signal(signal.SIGINT, fwagent_signal_handler)
 
-import enum
 import fnmatch
 import json
 import os
@@ -44,7 +43,7 @@ import time
 try:
     import psutil
     assert psutil   # the import verifies the python environment, psutil is used by other modules
-except Exception as e:
+except Exception:
     print("failed to load psutil, ensure you use python 3.8 or later")
     sys.exit(1)
 import Pyro4
@@ -518,7 +517,7 @@ class FwAgent(FwObject):
         try:
             with open(fwglobals.g.DEVICE_TOKEN_FILE, 'r') as fin:
                 device_token = fin.readline()
-        except Exception as _e:
+        except Exception:
             self.log.error(f"failed to retrieve device token ({fwglobals.g.DEVICE_TOKEN_FILE}) -> stop connection trials (restart agent to resume)")
             self.connection_thread.stop()
             self.connection_thread = None

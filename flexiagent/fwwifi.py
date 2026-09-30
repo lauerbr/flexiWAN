@@ -19,7 +19,6 @@
 ################################################################################
 
 import glob
-import psutil
 import os
 import time
 import subprocess
