@@ -68,6 +68,55 @@ const sequenceExpireTime = configs.get('sequenceExpireTime') ?? 300; // seconds
 const connectDevicePrefix = configs.get('connectDevicePrefix') ?? 'fw-conn';
 const connectExpireTime = configs.get('connectExpireTime') ?? 300; // seconds
 
+// Number of devices connection state keys to get from redis in one MGET
+const PING_CHECK_BATCH_SIZE = 500;
+
+// Schema of the get-device-info response, built once at module load
+const devInfoSchema = Joi.object().keys({
+  device: Joi
+    .string()
+    .pattern(/^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/)
+    .required(),
+  components: Joi.object({
+    agent: Joi.object()
+      .keys({ version: Joi.string().required() })
+      .required(),
+    router: Joi.object()
+      .keys({ version: Joi.string().required() })
+      .required(),
+    vpp: Joi.object()
+      .keys({ version: Joi.string().required() })
+      .required(),
+    frr: Joi.object()
+      .keys({ version: Joi.string().required() })
+      .required(),
+    edgeui: Joi.object()
+      .keys({ version: Joi.string().required() })
+      .optional()
+  }),
+  stats: Joi.object().optional(),
+  network: Joi.object().optional(),
+  tunnels: Joi.array().optional(),
+  jobs: Joi.array().optional(),
+  reconfig: Joi.string().allow('').optional(),
+  ikev2: Joi.object({
+    certificateExpiration: Joi.string().allow('').optional(),
+    error: Joi.string().allow('').optional()
+  }).allow({}).optional(),
+  cpuInfo: Joi.object().optional(),
+  distro: Joi.object().optional()
+}).custom((obj, helpers) => {
+  for (const [component, info] of Object.entries(
+    obj.components
+  )) {
+    const ver = info.version;
+    if (!(isSemVer(ver) || isVppVersion(ver))) {
+      return helpers.message(`invalid ${component} version ${ver}`);
+    }
+  }
+  return obj;
+});
+
 class Connections {
   constructor () {
     this.createConnection = this.createConnection.bind(this);
@@ -84,6 +133,7 @@ class Connections {
     this.callRegisteredCallbacks = this.callRegisteredCallbacks.bind(this);
     this.sendDeviceInfoMsg = this.sendDeviceInfoMsg.bind(this);
     this.pingCheck = this.pingCheck.bind(this);
+    this.pingCheckDevice = this.pingCheckDevice.bind(this);
     this.isSocketAlive = this.isSocketAlive.bind(this);
     this.registerStatusCallback = this.registerStatusCallback.bind(this);
     this.publishStatus = this.publishStatus.bind(this);
@@ -311,44 +361,60 @@ class Connections {
    * @return {void}
    */
   pingCheck () {
-    this.getAllDevices().forEach(deviceID => {
-      const { socket } = this.devices.getDeviceInfo(deviceID);
-      const connectDeviceKey = `${connectDevicePrefix}:${deviceID}`;
-      this.redisClient.get(connectDeviceKey, (error, remoteHostId) => {
+    const deviceIds = this.getAllDevices();
+    // Get the connection state of the devices from redis in batches
+    for (let i = 0; i < deviceIds.length; i += PING_CHECK_BATCH_SIZE) {
+      const batch = deviceIds.slice(i, i + PING_CHECK_BATCH_SIZE);
+      const sockets = batch.map(deviceID => this.devices.getDeviceInfo(deviceID)?.socket);
+      const keys = batch.map(deviceID => `${connectDevicePrefix}:${deviceID}`);
+      this.redisClient.mget(keys, (error, remoteHostIds) => {
         if (error) {
-          logger.warn('Failed to get device connection state in redis', {
-            params: { deviceId: deviceID }
+          logger.warn('Failed to get devices connection state in redis', {
+            params: { devices: batch.length, err: error.message }
           });
           return;
         }
-        if (!remoteHostId) {
-          // connection state expired, the device is not connected to any host
-          // the device info data should be removed
-          this.devices.removeDeviceInfo(deviceID);
-          logger.debug('The device connection state expired in redis', {
-            params: { deviceId: deviceID }
-          });
-        }
-        if (socket) {
-          const { readyState, CLOSING, CLOSED } = socket;
-          // Don't try to ping a closing or already closed socket
-          if (remoteHostId !== hostId || [CLOSING, CLOSED].includes(readyState)) {
-            this.closeConnection(deviceID);
-            return;
-          }
-          if (socket.isAlive <= 0) {
-            logger.warn('Terminating device due to ping failure', {
-              params: { deviceId: deviceID }
-            });
-            return socket.terminate();
-          }
-          // Decrement is Alive, if after few retries it reaches zero,
-          // ping fails and we terminate connection
-          socket.isAlive -= 1;
-          socket.ping();
-        }
+        batch.forEach((deviceID, idx) => {
+          this.pingCheckDevice(deviceID, sockets[idx], remoteHostIds[idx]);
+        });
       });
-    });
+    }
+  }
+
+  /**
+   * Checks websocket status of one device and sends a ping request
+   * @param  {string} deviceID     the device machine id
+   * @param  {Object} socket       the device websocket, if connected to this host
+   * @param  {string} remoteHostId the host id the device is connected to, from redis
+   * @return {void}
+   */
+  pingCheckDevice (deviceID, socket, remoteHostId) {
+    if (!remoteHostId) {
+      // connection state expired, the device is not connected to any host
+      // the device info data should be removed
+      this.devices.removeDeviceInfo(deviceID);
+      logger.debug('The device connection state expired in redis', {
+        params: { deviceId: deviceID }
+      });
+    }
+    if (socket) {
+      const { readyState, CLOSING, CLOSED } = socket;
+      // Don't try to ping a closing or already closed socket
+      if (remoteHostId !== hostId || [CLOSING, CLOSED].includes(readyState)) {
+        this.closeConnection(deviceID);
+        return;
+      }
+      if (socket.isAlive <= 0) {
+        logger.warn('Terminating device due to ping failure', {
+          params: { deviceId: deviceID }
+        });
+        return socket.terminate();
+      }
+      // Decrement is Alive, if after few retries it reaches zero,
+      // ping fails and we terminate connection
+      socket.isAlive -= 1;
+      socket.ping();
+    }
   }
 
   /**
@@ -979,51 +1045,6 @@ class Connections {
    */
   async sendDeviceInfoMsg (machineId, deviceId, org, isNewConnection = false) {
     const validateDevInfoMessage = msg => {
-      const devInfoSchema = Joi.object().keys({
-        device: Joi
-          .string()
-          .pattern(/^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/)
-          .required(),
-        components: Joi.object({
-          agent: Joi.object()
-            .keys({ version: Joi.string().required() })
-            .required(),
-          router: Joi.object()
-            .keys({ version: Joi.string().required() })
-            .required(),
-          vpp: Joi.object()
-            .keys({ version: Joi.string().required() })
-            .required(),
-          frr: Joi.object()
-            .keys({ version: Joi.string().required() })
-            .required(),
-          edgeui: Joi.object()
-            .keys({ version: Joi.string().required() })
-            .optional()
-        }),
-        stats: Joi.object().optional(),
-        network: Joi.object().optional(),
-        tunnels: Joi.array().optional(),
-        jobs: Joi.array().optional(),
-        reconfig: Joi.string().allow('').optional(),
-        ikev2: Joi.object({
-          certificateExpiration: Joi.string().allow('').optional(),
-          error: Joi.string().allow('').optional()
-        }).allow({}).optional(),
-        cpuInfo: Joi.object().optional(),
-        distro: Joi.object().optional()
-      }).custom((obj, helpers) => {
-        for (const [component, info] of Object.entries(
-          obj.components
-        )) {
-          const ver = info.version;
-          if (!(isSemVer(ver) || isVppVersion(ver))) {
-            return helpers.message(`invalid ${component} version ${ver}`);
-          }
-        }
-        return obj;
-      });
-
       const result = devInfoSchema.validate(msg);
       if (result.error) {
         return { valid: false, err: result.error.details[0].message };
@@ -1102,7 +1123,9 @@ class Connections {
 
       const { expireTime, jobQueued } = origDevice.IKEv2;
 
-      const { encryptionMethod } = await orgModel.findOne({ _id: origDevice.org });
+      const { encryptionMethod } = await orgModel.findOne(
+        { _id: origDevice.org }, { encryptionMethod: 1 }
+      ).lean();
       const { ikev2 } = deviceInfo.message;
       let needNewIKEv2Certificate = false;
       if (encryptionMethod === 'ikev2' && getMajorVersion(deviceInfo.message.device) >= 4) {

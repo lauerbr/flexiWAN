@@ -168,7 +168,8 @@ const loggerFactory = (env) => {
       info: testLogger,
       verbose: testLogger,
       debug: testLogger,
-      silly: testLogger
+      silly: testLogger,
+      isLevelEnabled: () => true
     };
     return testLoggerObj;
   }
@@ -253,48 +254,28 @@ module.exports = function (header) {
   // This code throws if not all mandatory fields are passed
   enforceHeaderFields(header);
 
+  /**
+   * Create a logging function for a level. The context is converted only
+   * when the level is enabled, as the conversion may be expensive
+   * @param  {string} level log level
+   * @return {Function} logging function
+   */
+  const logAtLevel = (level) => function (msg, ctx = {}) {
+    const log = getLogger();
+    if (!log.isLevelEnabled(level)) return;
+    log[level]({
+      message: msg,
+      ctx: deepObjectConvert(ctx),
+      header: header
+    });
+  };
+
   return {
-    error: function (msg, ctx = {}) {
-      getLogger().error({
-        message: msg,
-        ctx: deepObjectConvert(ctx),
-        header: header
-      });
-    },
-    warn: function (msg, ctx = {}) {
-      getLogger().warn({
-        message: msg,
-        ctx: deepObjectConvert(ctx),
-        header: header
-      });
-    },
-    info: function (msg, ctx = {}) {
-      getLogger().info({
-        message: msg,
-        ctx: deepObjectConvert(ctx),
-        header: header
-      });
-    },
-    verbose: function (msg, ctx = {}) {
-      getLogger().verbose({
-        message: msg,
-        ctx: deepObjectConvert(ctx),
-        header: header
-      });
-    },
-    debug: function (msg, ctx = {}) {
-      getLogger().debug({
-        message: msg,
-        ctx: deepObjectConvert(ctx),
-        header: header
-      });
-    },
-    silly: function (msg, ctx = {}) {
-      getLogger().silly({
-        message: msg,
-        ctx: deepObjectConvert(ctx),
-        header: header
-      });
-    }
+    error: logAtLevel('error'),
+    warn: logAtLevel('warn'),
+    info: logAtLevel('info'),
+    verbose: logAtLevel('verbose'),
+    debug: logAtLevel('debug'),
+    silly: logAtLevel('silly')
   };
 };
