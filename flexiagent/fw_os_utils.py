@@ -21,6 +21,7 @@
 import importlib.util
 import json
 import os
+import shlex
 import stat
 import subprocess
 import time
@@ -137,12 +138,18 @@ def run_fwagent_command(cmd, appl_id=None):
     create -addr ..." shell command, and the shell process will be blocked on the system lock,
     while trying to modify router configuration. That creates the deadlock.
 
-    :param cmd:         Options of the 'fwagent' command to be run.
+    :param cmd:         Options of the 'fwagent' command to be run - either list of
+                        arguments or string of space separated arguments.
+                        The command is run without shell, so no shell features
+                        (pipes, redirections, variables) are supported.
     :param appl_id:     Application identifier. It is stored in the 'identifier' field
                         of the FwApplicationInterface abstract class.
     '''
-    exec_cmd = f'fwagent --appl_id={appl_id} {cmd}' if appl_id else f'fwagent {cmd}'
-    out      = subprocess.check_output(exec_cmd, shell=True, stderr=subprocess.STDOUT).decode()
+    exec_cmd = ['fwagent']
+    if appl_id:
+        exec_cmd.append(f'--appl_id={appl_id}')
+    exec_cmd += list(cmd) if isinstance(cmd, (list, tuple)) else shlex.split(cmd)
+    out      = subprocess.check_output(exec_cmd, stderr=subprocess.STDOUT).decode()
     out_dict = json.loads(out) if out else {}
     return out_dict
 

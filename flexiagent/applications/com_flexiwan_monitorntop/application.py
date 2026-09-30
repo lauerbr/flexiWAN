@@ -43,6 +43,7 @@ sys.path.append(agent_dir)
 
 from applications.fwapplication_interface import FwApplicationInterface
 import fw_os_utils
+import fw_input_validation
 from build.config import config
 
 COUNT_TO_APPLY_WATCHDOG = 10
@@ -173,6 +174,21 @@ class Application(FwApplicationInterface):
         with open(new_file, 'w') as new_file:
             new_file.writelines(new_lines)
 
+    def _validate_params(self, params):
+        """Validate parameters that are used in 'fwagent' command lines
+        and in the ntopng.conf file.
+        """
+        for interface in params.get('interfaces', []):
+            if type(interface)==dict:
+                fw_input_validation.ensure_ifname(interface.get('ifName'), 'ifName')
+                dev_id = interface.get('devId')
+                if interface.get('ifType') != 'pppoe' and \
+                   (not fw_input_validation.is_shell_safe_word(dev_id) or dev_id.startswith('-')):
+                    raise Exception(f'invalid devId {dev_id!r}')
+            elif type(interface)==str:
+                fw_input_validation.ensure_ifname(interface, 'interface')
+        fw_input_validation.ensure_int(params.get('serverPort', '9000'), 'serverPort', 1, 65535)
+
     def configure(self, params):
         """Configure NTOPNG server on host.
 
@@ -182,6 +198,8 @@ class Application(FwApplicationInterface):
         """
         try:
             self.log.info(f"NTOP-NG application configurations")
+
+            self._validate_params(params)
 
             # Create databases of interfaces
             data = self._read_db_data()
