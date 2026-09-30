@@ -57,6 +57,9 @@ applicationsStatsSchema.index(
   { expireAfterSeconds: configs.get('analyticsStatsKeepTime', 'number') }
 );
 
+// Used by the periodic stats upsert and by the stats queries
+applicationsStatsSchema.index({ org: 1, device: 1, app: 1, time: 1 });
+
 const applicationsStats = mongoConns.getAnalyticsDB()
   .model('applicationStats', applicationsStatsSchema);
 

@@ -83,6 +83,12 @@ const configEnv = {
     mongoBillingUrl: `mongodb://${hostname}:27017,${hostname}:27018,${hostname}:27019/flexibilling?replicaSet=rs`,
     // Mongo VPN database
     mongoVpnUrl: `mongodb://${hostname}:27017,${hostname}:27018,${hostname}:27019/flexivpn?replicaSet=rs`,
+    // Max number of connections in each mongoose connection pool (main/analytics/vpn)
+    mongoPoolSize: 20,
+    // Let mongoose build the indexes defined in the schemas on startup.
+    // New indexes are also created by the database migrations, so this can be
+    // disabled on large production deployments to avoid index builds on startup
+    mongoAutoIndex: true,
     // Billing Redirect OK page url
     billingRedirectOkUrl: 'https://local.flexiwan.com/ok.html',
     // Biling config site - this is used as the billing site name in ChargeBee

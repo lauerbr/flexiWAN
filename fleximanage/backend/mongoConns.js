@@ -19,33 +19,31 @@ const configs = require('./configs')();
 const mongoose = require('mongoose');
 const logger = require('./logging/logging')({ module: module.filename, type: 'mongodb' });
 
+const connOptions = {
+  useNewUrlParser: true,
+  useCreateIndex: true,
+  poolSize: configs.get('mongoPoolSize', 'number') || 20,
+  autoIndex: configs.get('mongoAutoIndex', 'boolean') !== false
+};
+
 class MongoConns {
   constructor () {
     this.getMainDB = this.getMainDB.bind(this);
     this.getAnalyticsDB = this.getAnalyticsDB.bind(this);
 
-    this.mainDB = mongoose.createConnection(configs.get('mongoUrl'), {
-      useNewUrlParser: true,
-      useCreateIndex: true
-    });
+    this.mainDB = mongoose.createConnection(configs.get('mongoUrl'), connOptions);
     this.mainDB.then((db) => {
       logger.info('Connected to MongoDB mainDB');
     }, (err) => { logger.error('Failed to connect to mainDB', { params: { err: err.message } }); });
 
-    this.analyticsDB = mongoose.createConnection(configs.get('mongoAnalyticsUrl'), {
-      useNewUrlParser: true,
-      useCreateIndex: true
-    });
+    this.analyticsDB = mongoose.createConnection(configs.get('mongoAnalyticsUrl'), connOptions);
     this.analyticsDB.then((db) => {
       logger.info('Connected to MongoDB analyticsDB');
     }, (err) => {
       logger.error('Failed to connect to analyticsDB', { params: { err: err.message } });
     });
 
-    this.vpnDB = mongoose.createConnection(configs.get('mongoVpnUrl'), {
-      useNewUrlParser: true,
-      useCreateIndex: true
-    });
+    this.vpnDB = mongoose.createConnection(configs.get('mongoVpnUrl'), connOptions);
     this.vpnDB.then((db) => {
       logger.info('Connected to MongoDB vpnDB');
     }, (err) => {

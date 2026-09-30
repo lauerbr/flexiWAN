@@ -197,6 +197,11 @@ const tunnelSchema = new Schema({
 // tunnel number per org must be unique
 tunnelSchema.index({ num: 1, org: 1 }, { unique: true });
 tunnelSchema.index({ org: 1 });
+// Tunnels are usually looked up by one of their devices ($or on deviceA / deviceB)
+tunnelSchema.index({ deviceA: 1 });
+tunnelSchema.index({ deviceB: 1 });
+// Used by the periodic release of pending tunnels
+tunnelSchema.index({ isPending: 1 }, { partialFilterExpression: { isPending: true } });
 
 // Default exports
 module.exports = mongoConns.getMainDB().model('tunnels', tunnelSchema);
