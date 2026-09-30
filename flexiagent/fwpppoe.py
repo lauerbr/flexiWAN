@@ -28,6 +28,7 @@ from sqlitedict import SqliteDict
 
 from typing import Dict
 
+import fw_input_validation
 import fwglobals
 import fwnetplan
 import fwutils
@@ -152,7 +153,7 @@ class FwPppoeConnection():
                 file.write('mtu %u' % self.mtu + os.linesep)
                 file.write('mru %u' % self.mru + os.linesep)
                 file.write('nic-%s' % self.if_name + os.linesep)
-                file.write('user %s' % self.user + os.linesep)
+                file.write('user %s' % pppd_quote(self.user) + os.linesep)
                 file.write('ifname %s' % self.ppp_if_name + os.linesep)
                 if self.usepeerdns:
                     file.write('usepeerdns' + os.linesep)
@@ -392,10 +393,11 @@ class FwPppoeSecretsConfig(FwObject):
             return
 
         try:
-            with open(self.path + self.filename, 'w') as file:
-                file.write(pppoe_secrets_top)
-                for user in self.users.values():
-                    file.write(str(user) + os.linesep)
+            # The secrets file must be readable by root only
+            content = pppoe_secrets_top
+            for user in self.users.values():
+                content += str(user) + os.linesep
+            fw_os_utils.write_private_file(self.path + self.filename, content, mode=0o600)
 
         except Exception as e:
             self.log.error("save: %s" % str(e))
@@ -437,10 +439,17 @@ class FwPppoeSecretsConfig(FwObject):
             self.ip = ip
 
         def __str__(self):
-            return f'{self.name} {self.server} {self.password} {self.ip}'
+            return f'{pppd_quote(self.name)} {self.server} {pppd_quote(self.password)} {self.ip}'
 
         def get_name(self):
             return self.name
+
+def pppd_quote(value):
+    """Quote value for pppd options/secrets files: pppd splits words by
+    whitespaces, supports double quotes and backslash escapes inside them.
+    """
+    value = str(value)
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 class FwPppoeInterface():
     """The object that represents PPPoE interface configuration.
@@ -682,6 +691,14 @@ class FwPppoeClient(FwObject):
     def add_interface(self, user, password, mtu, mru, usepeerdns, metric, enabled, nameservers, if_name = None, dev_id = None):
         """Add interface into database.
         """
+        # The user and password are written into pppd configuration files,
+        # and name servers are used in command line, so validate them.
+        fw_input_validation.ensure_no_control_chars(user, 'PPPoE user')
+        if password:
+            fw_input_validation.ensure_no_control_chars(password, 'PPPoE password')
+        for nameserver in (nameservers or []):
+            fw_input_validation.ensure_ip(nameserver, 'PPPoE name server')
+
         pppoe_iface = FwPppoeInterface(user, password, mtu, mru, usepeerdns, metric, enabled, nameservers)
 
         if not dev_id:
