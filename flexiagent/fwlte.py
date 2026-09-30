@@ -650,20 +650,20 @@ class FwLinuxModem(FwObject):
         return str(pin)
 
     def _enable_pin(self, pin):
-        return self._run_pin_command(f'--enable-pin --pin={self._ensure_pin(pin)}')
+        return self._run_pin_command(lambda: f'--enable-pin --pin={self._ensure_pin(pin)}')
 
     def _disable_pin(self, pin):
-        return self._run_pin_command(f'--disable-pin --pin={self._ensure_pin(pin)}')
+        return self._run_pin_command(lambda: f'--disable-pin --pin={self._ensure_pin(pin)}')
 
     def _change_pin(self, current, new):
-        return self._run_pin_command(f'--pin={self._ensure_pin(current)} --change-pin={self._ensure_pin(new)}')
+        return self._run_pin_command(lambda: f'--pin={self._ensure_pin(current)} --change-pin={self._ensure_pin(new)}')
 
     def _unblock_pin(self, puk, new):
-        return self._run_pin_command(f'--puk={self._ensure_pin(puk, "PUK")} --pin={self._ensure_pin(new)}')
+        return self._run_pin_command(lambda: f'--puk={self._ensure_pin(puk, "PUK")} --pin={self._ensure_pin(new)}')
 
     def _verify_pin(self, pin):
         self.log.debug('verifying lte pin number')
-        output, err = self._run_pin_command(f'--pin={self._ensure_pin(pin)}')
+        output, err = self._run_pin_command(lambda: f'--pin={self._ensure_pin(pin)}')
         if not err:
             # after verifying pin, ensure the modem is not locked
             modem_state, _ = self._get_modem_state()
@@ -673,6 +673,16 @@ class FwLinuxModem(FwObject):
         return (output, err)
 
     def _run_pin_command(self, mmcli_pin_flag):
+        """Run mmcli PIN command.
+
+        :param mmcli_pin_flag: mmcli PIN flags string, or function that builds it
+                               (it raises ValueError if PIN/PUK is not valid).
+        """
+        try:
+            if callable(mmcli_pin_flag):
+                mmcli_pin_flag = mmcli_pin_flag()
+        except ValueError as e:
+            return (self.get_active_sim_pin_state(), str(e))
         data = self._get_modem_manager_data()
         sim_path = data.get('generic', {}).get('sim')
         try:

@@ -21,7 +21,7 @@
 import copy
 import time
 from netaddr import *
-from subprocess import Popen, PIPE, STDOUT
+from subprocess import Popen, PIPE, STDOUT, DEVNULL
 import fw_input_validation
 import fwglobals
 import fwutils
@@ -47,7 +47,7 @@ def start_fping_process(cmd):
 
     :returns: Command execution result.
     """
-    process = Popen(cmd, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    process = Popen(cmd, stdin=DEVNULL, stdout=PIPE, stderr=PIPE, universal_newlines=True)
     return process
 
 def _build_fping_cmd(hosts, timeout, interface=None):

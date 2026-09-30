@@ -181,7 +181,7 @@ class FwWanMonitorRoute(fwroutes.FwRoute):
            fw_input_validation.is_valid_int(self.probe_timeout, 0):
             cmd = ['fping', server_address, '-C', '1', '-q', '-R', '-I', str(self.dev), '-t', str(self.probe_timeout)]
             try:
-                output = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                output = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         universal_newlines=True, timeout=60).stdout
             except Exception as e:
                 output = str(e)
