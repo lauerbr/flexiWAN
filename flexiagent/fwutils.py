@@ -33,6 +33,7 @@ import linecache
 import os
 import platform
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -3548,8 +3549,11 @@ def frr_setup_config():
     subprocess.check_call('sudo sed -i -E "s/^service integrated-vtysh-config/no service integrated-vtysh-config/" %s' % (fwglobals.g.FRR_VTYSH_FILE), shell=True)
 
     # Setup basics on frr.conf.
+    # The vty password protects telnet access to FRR daemons. vtysh uses unix
+    # sockets and does not need it, so use random password instead of the
+    # well-known default "zebra".
     frr_commands = [
-        "password zebra",
+        f"password {secrets.token_hex(16)}",
         f"log file {fwglobals.g.FRR_LOG_FILE} notifications",
         "log stdout notifications",
         "log syslog notifications"

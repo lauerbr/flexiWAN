@@ -356,13 +356,21 @@ class FwDump(FwObject):
         if path:
             self.zip_file = os.path.join(path, self.zip_file)
 
-        os.system(f'sudo chmod 777 -R {self.temp_folder}')
+        # The dump includes a copy of the agent folder (databases with keys, etc).
+        # Do not include the authentication tokens and make the dump accessible
+        # by the owner (root) only.
+        for secret_file in [fwglobals.config.filenames.device_token, 'token.txt']:
+            secret_path = os.path.join(self.temp_folder, 'fwagent', secret_file)
+            if os.path.exists(secret_path):
+                os.remove(secret_path)
+        os.system(f'sudo chmod -R u+rwX,go-rwx {self.temp_folder}')
 
         cmd = 'tar -zcf %s -C %s .' % (self.zip_file, self.temp_folder)
         try:
             if path and not os.path.exists(path):
                 os.system('mkdir -p %s > /dev/null 2>&1' % path)
             subprocess.check_call(cmd, shell=True)
+            os.chmod(self.zip_file, 0o600)
         except Exception as e:
             print(self.prompt + 'ERROR: "%s" failed: %s' % (cmd, str(e)))
 
