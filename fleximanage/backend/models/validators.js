@@ -24,6 +24,7 @@ const phoneUtil = require('google-libphonenumber').PhoneNumberUtil.getInstance()
 const configs = require('../configs')();
 const IPCidr = require('ip-cidr');
 const Joi = require('joi');
+const { isPrivateAddress } = require('../utils/security');
 
 // Globals
 const protocols = ['OSPF', 'NONE', 'BGP', 'OSPF,BGP'];
@@ -421,7 +422,12 @@ const validateWebhookSettings = (webhookNotificationsSettings, allowNull) => {
       }
 
       try {
-        Boolean(new URL(webhookURL));
+        const hostname = new URL(webhookURL).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+        // Internal addresses are not allowed. Host names are checked again when sending
+        if ((net.isIP(hostname) && isPrivateAddress(hostname)) ||
+          hostname === 'localhost' || hostname.endsWith('.localhost')) {
+          messages.push('Webhook URL must not point to an internal address');
+        }
       } catch (_) {
         messages.push('Invalid Webhook URL');
       }

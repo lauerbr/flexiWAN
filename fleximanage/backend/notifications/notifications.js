@@ -476,8 +476,9 @@ class NotificationsManager {
     if ((severity === 'warning' && sendWarningAlerts) ||
     (severity === 'critical' && sendCriticalAlerts)) {
       const title = `New ${configs.get('companyName')} notification`;
+      // the webhook URL is provided by users, don't allow internal addresses
       if (!await webHooks.sendToWebHook(webhookURL, webHookMessage, '',
-        title)) {
+        title, { blockPrivateAddresses: true })) {
         logger.error('Failed to send an immediate webhook notification', {
           params: { message: webHookMessage }
         });
