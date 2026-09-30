@@ -35,6 +35,7 @@ from fwqos import FwQoS
 import fwutils
 import threading
 import fw_os_utils
+import fw_redact
 import fw_vpp_coredump_utils
 import fwlte
 import ipaddress
@@ -932,7 +933,7 @@ class Fwglobals(FwObject):
 
         except Exception as e:
             global log
-            err_str = "%s(%s): %s" % (req, format(request.get('params')), str(e))
+            err_str = "%s(%s): %s" % (req, format(fw_redact.redact(request.get('params'))), str(e))
             if isinstance(e, fw_os_utils.CalledProcessSigTerm):
                 log.debug(err_str)
             else:

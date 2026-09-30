@@ -64,6 +64,7 @@ import fwikev2
 import fwlte
 import fwmultilink
 import fw_os_utils
+import fw_redact
 import fwpppoe
 import fwrouter_cfg
 import fwthread
@@ -291,7 +292,7 @@ class FwAgent(FwObject):
                 'cpuInfo': cpu_info,
                 'distro': {'version': linux_version, 'codename': codename},
         }
-        self.log.debug("Registering to %s with: %s" % (url, json.dumps(data)))
+        self.log.debug("Registering to %s with: %s" % (url, fw_redact.dumps(data)))
         data.update({'interfaces': json.dumps(interfaces)})
         data = uparse.urlencode(data).encode()
         req = ureq.Request(url, data)

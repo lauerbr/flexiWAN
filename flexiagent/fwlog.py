@@ -27,6 +27,8 @@ import traceback
 
 from datetime import datetime
 
+from fw_redact import redact_str
+
 FWLOG_LEVEL_INFO  = 0x01
 FWLOG_LEVEL_DEBUG = 0x0F
 FWLOG_LEVEL_TRACE = 0xFF
@@ -66,7 +68,7 @@ class Fwlog:
 
         :returns: None.
         """
-        self._log("excep: " + log_message, to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
+        self._log("excep: " + redact_str(log_message), to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
 
     def error(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
         """Print error message.
@@ -78,7 +80,7 @@ class Fwlog:
 
         :returns: None.
         """
-        self._log("error: " + log_message, to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
+        self._log("error: " + redact_str(log_message), to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
 
     def warning(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
         """Print warning message.
@@ -90,7 +92,7 @@ class Fwlog:
 
         :returns: None.
         """
-        self._log("*** warning: " + log_message + " ***", to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
+        self._log("*** warning: " + redact_str(log_message) + " ***", to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
 
     def info(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
         """Print info message.
@@ -103,7 +105,7 @@ class Fwlog:
         :returns: None.
         """
         if self.level >= FWLOG_LEVEL_INFO:
-            self._log(log_message, to_terminal, to_syslog, print_bt=print_bt)
+            self._log(redact_str(log_message), to_terminal, to_syslog, print_bt=print_bt)
 
     def debug(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
         """Print debug message.
@@ -116,7 +118,7 @@ class Fwlog:
         :returns: None.
         """
         if self.level >= FWLOG_LEVEL_DEBUG:
-            self._log(log_message, to_terminal, to_syslog, print_bt=print_bt)
+            self._log(redact_str(log_message), to_terminal, to_syslog, print_bt=print_bt)
 
     def trace(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
         """Print debug message.
@@ -129,7 +131,7 @@ class Fwlog:
         :returns: None.
         """
         if self.level >= FWLOG_LEVEL_TRACE:
-            self._log(log_message, to_terminal, to_syslog, print_bt=print_bt)
+            self._log(redact_str(log_message), to_terminal, to_syslog, print_bt=print_bt)
 
     def set_level(self, level):
         """Set severity level to show messages that are above this level.
@@ -252,17 +254,23 @@ class FwLogFile(Fwlog):
 
         if os.path.exists(filename):
             self.cur_size = os.path.getsize(filename)
-        self.f = open(filename, 'a')
+        self.f = self._open(filename, 'a')
 
     def __str__(self):
         return os.path.join(self.filepath, self.filename)
+
+    def _open(self, filename, mode):
+        """Open log file. New files are created with 0640 permissions,
+        as logs might include sensitive information."""
+        flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if mode == 'a' else os.O_TRUNC)
+        return os.fdopen(os.open(filename, flags, 0o640), mode)
 
     def _rotate(self):
         self.f.close()
         main_filename = os.path.join(self.filepath, self.filename)
         backup_filename = os.path.join(self.filepath, self.filename + '.1')
         os.rename(main_filename, backup_filename)
-        self.f = open(main_filename, 'w')
+        self.f = self._open(main_filename, 'w')
         self.cur_size = 0
 
     def _log(self, log_message, to_terminal=True, to_syslog=True, truncate_long_line=False, print_bt=False):
