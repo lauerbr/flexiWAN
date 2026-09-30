@@ -70,6 +70,9 @@ deviceStatsSchema.index(
   { expireAfterSeconds: configs.get('analyticsStatsKeepTime', 'number') }
 );
 
+// Used by the periodic stats upsert and by the stats queries
+deviceStatsSchema.index({ org: 1, device: 1, time: 1 });
+
 const deviceStats = mongoConns.getAnalyticsDB().model('deviceStats', deviceStatsSchema);
 const deviceAggregateStats = mongoConns
   .getAnalyticsDB()

@@ -19,16 +19,6 @@ const logger = require('../logging/logging')({ module: module.filename, type: 'p
 const configs = require('../configs')();
 const fetchUtils = require('../utils/fetchUtils');
 const applicationStore = require('../models/applicationStore');
-const applications = require('../models/applications');
-const organizations = require('../models/organizations');
-const { membership } = require('../models/membership');
-const ObjectId = require('mongoose').Types.ObjectId;
-const notificationsMgr = require('../notifications/notifications')();
-const mailer = require('../utils/mailer')(
-  configs.get('mailerHost'),
-  configs.get('mailerPort'),
-  configs.get('mailerBypassCert')
-);
 
 /***
  * This class serves as the applications update manager, responsible for
@@ -53,112 +43,6 @@ class ApplicationsUpdateManager {
     if (applicationsUpdater) return applicationsUpdater;
     applicationsUpdater = new ApplicationsUpdateManager();
     return applicationsUpdater;
-  }
-
-  /**
-    * Upgrade application version on devices if needed.
-    * if yes - notify and send emails
-    * @async
-    * @param {application} appStoreApp
-    * @param {Boolean}
-    * @return {void}
-    */
-  async checkDevicesUpgrade (appStoreApp) {
-    // get devices with old version of appStoreApp
-    const oldVersionsDevices = await applications.aggregate([
-      {
-        $match: {
-          appStoreApp: ObjectId(appStoreApp._id),
-          installedVersion: { $ne: appStoreApp.latestVersion },
-          pendingToUpgrade: { $ne: true }
-        }
-      },
-      {
-        $lookup: {
-          from: 'devices',
-          localField: '_id',
-          foreignField: 'applications.app',
-          as: 'devices'
-        }
-      },
-      {
-        $project: {
-          installedVersion: 1,
-          org: 1,
-          'devices._id': 1,
-          'devices.machineId': 1,
-          'devices.name': 1
-        }
-      }
-    ]);
-
-    if (oldVersionsDevices.length) {
-      const notifications = [];
-
-      for (let i = 0; i < oldVersionsDevices.length; i++) {
-        const app = oldVersionsDevices[i];
-        const devices = app.devices;
-
-        if (devices.length) {
-          const oldVersion = app.installedVersion;
-          const newVersion = appStoreApp.latestVersion;
-
-          devices.forEach(device => {
-            notifications.push({
-              org: app.org,
-              title: `Application ${appStoreApp.name} upgrade`,
-              details: 'This application requires upgrade from version ' + oldVersion +
-              ' to ' + newVersion + ' in the device ' + device.name,
-              targets: {
-                deviceId: device._id,
-                tunnelId: null,
-                interfaceId: null
-                // policyId: null
-              },
-              eventType: 'Software update',
-              resolved: true,
-              isInfo: true
-            });
-          });
-
-          // mark as sent upgrade message
-          await applications.updateOne(
-            { _id: app._id },
-            { $set: { pendingToUpgrade: true } }
-          );
-
-          const organization = await organizations.findOne({ _id: app.org });
-
-          const memberships = await membership.find({
-            account: organization.account,
-            to: 'account',
-            role: 'owner'
-          }, 'user').populate('user');
-
-          const emailAddresses = memberships.map(doc => { return doc.user.email; });
-
-          // TODO: fix email template
-          await mailer.sendMailHTML(
-            configs.get('mailerFromAddress'),
-            emailAddresses,
-            `Upgrade Your ${appStoreApp.name} Application`,
-            `<h2>Your application needs to upgrade</h2><br>
-            <b>Click below to upgrade your application:</b>
-            <p><a href="${configs.get('uiServerUrl')}/applications">
-            <button style="color:#fff;background-color:#F99E5B;
-            border-color:#F99E5B;font-weight:400;text-align:center;
-            vertical-align:middle;border:1px solid transparent;
-            padding:.375rem .75rem;font-size:1rem;line-height:1.5;
-            border-radius:.25rem;
-            cursor:pointer">Upgrade Application</button></a></p>
-            <p>Yours,<br>
-            The flexiWAN team</p>`
-          );
-        }
-      }
-
-      await notificationsMgr.sendNotifications(notifications);
-    }
   }
 
   /**
@@ -202,9 +86,6 @@ class ApplicationsUpdateManager {
           set,
           options
         );
-
-        // check if devices needs to upgrade
-        // await this.checkDevicesUpgrade(app);
       }
 
       if (isUpdated) {

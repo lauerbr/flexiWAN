@@ -372,6 +372,28 @@ class DevicesService {
         parsedFilters = JSON.parse(filters);
       }
       const hasFilters = parsedFilters.length > 0;
+      // Sorting by a looked-up field requires the lookups before sorting
+      const sortByLookup = !!sortField &&
+        /^(policies\.(multilink|firewall|qos)\.policy\.|pathlabels|vrrp)/.test(sortField);
+      // The organization lookup is needed before pagination only for filtering or sorting by it
+      const orgFieldRegex = /(^|\|)org\./;
+      const orgBeforePaging = (!!sortField && orgFieldRegex.test(sortField)) ||
+        parsedFilters.some(f => orgFieldRegex.test(f.key));
+      const orgLookup = [
+        {
+          $lookup: {
+            from: 'organizations',
+            localField: 'org',
+            foreignField: '_id',
+            as: 'org'
+          }
+        },
+        {
+          $unwind: {
+            path: '$org'
+          }
+        }
+      ];
 
       const pipeline = [
         {
@@ -379,7 +401,7 @@ class DevicesService {
             org: { $in: orgList.map(o => mongoose.Types.ObjectId(o)) }
           }
         },
-        ...hasFilters ? ([
+        ...(hasFilters || sortByLookup) ? ([
           {
             $lookup: {
               from: 'multilinkpolicies',
@@ -439,19 +461,7 @@ class DevicesService {
             }
           }
         ]) : [],
-        {
-          $lookup: {
-            from: 'organizations',
-            localField: 'org',
-            foreignField: '_id',
-            as: 'org'
-          }
-        },
-        {
-          $unwind: {
-            path: '$org'
-          }
-        },
+        ...orgBeforePaging ? orgLookup : [],
         {
           $addFields: {
             _id: { $toString: '$_id' },
@@ -507,15 +517,17 @@ class DevicesService {
           $sort: { [sortField]: order }
         });
       };
+      // Paginate before the (heavy) response stages, they run only for the returned page
       const paginationParams = [{
         $skip: offset > 0 ? +offset : 0
       }];
       if (limit !== undefined) {
         paginationParams.push({ $limit: +limit });
       };
+      if (!orgBeforePaging) paginationParams.push(...orgLookup);
 
       if (requestParams.response === 'summary') {
-        pipeline.push({
+        paginationParams.push({
           $project: {
             org: { $toString: '$org._id' },
             orgInfo: {
@@ -552,7 +564,7 @@ class DevicesService {
           }
         });
       } else if (requestParams.response === 'ids') {
-        pipeline.push({ $project: { _id: 1, name: 1 } });
+        paginationParams.push({ $project: { _id: 1, name: 1 } });
       } else {
         // fields to return in detailed response
         const respFields = [
@@ -586,41 +598,48 @@ class DevicesService {
           'coords',
           'distro'
         ];
-        // populate pathlabels for every interface
-        pipeline.push({
-          $unwind: {
-            path: '$interfaces',
-            preserveNullAndEmptyArrays: true
-          }
-        }, {
+        // populate pathlabels for every interface, without unwinding the interfaces,
+        // so the sort order is kept
+        paginationParams.push({
           $lookup: {
             from: 'pathlabels',
             localField: 'interfaces.pathlabels',
             foreignField: '_id',
-            as: 'interfaces.pathlabels'
+            as: 'interfacesPathlabels'
           }
         }, {
-          $addFields: {
-            'interfaces.pathlabels': {
+          $project: {
+            // missing fields are returned as null
+            ...respFields.reduce((r, f) => ({ ...r, [f]: { $ifNull: ['$' + f, null] } }), { }),
+            interfaces: {
               $map: {
-                input: '$interfaces.pathlabels',
-                as: 'pl',
+                input: { $ifNull: ['$interfaces', []] },
+                as: 'ifc',
                 in: {
-                  _id: { $toString: '$$pl._id' },
-                  name: '$$pl.name',
-                  description: '$$pl.description',
-                  color: '$$pl.color',
-                  type: '$$pl.type'
+                  $mergeObjects: ['$$ifc', {
+                    pathlabels: {
+                      $map: {
+                        input: {
+                          $filter: {
+                            input: '$interfacesPathlabels',
+                            as: 'pl',
+                            cond: { $in: ['$$pl._id', { $ifNull: ['$$ifc.pathlabels', []] }] }
+                          }
+                        },
+                        as: 'pl',
+                        in: {
+                          _id: { $toString: '$$pl._id' },
+                          name: '$$pl.name',
+                          description: '$$pl.description',
+                          color: '$$pl.color',
+                          type: '$$pl.type'
+                        }
+                      }
+                    }
+                  }]
                 }
               }
             }
-          }
-        }, {
-          $group: {
-            _id: '$_id',
-            // name: { $first: '$name' },
-            ...respFields.reduce((r, f) => ({ ...r, [f]: { $first: '$' + f } }), { }),
-            interfaces: { $push: '$interfaces' }
           }
         });
       }

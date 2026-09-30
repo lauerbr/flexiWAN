@@ -26,7 +26,6 @@ const OrganizationsService = require('./OrganizationsService');
 const TokensService = require('./TokensService');
 const AppIdentificationsService = require('./AppIdentificationsService');
 const TunnelsService = require('./TunnelsService');
-const UsersService = require('./UsersService');
 const BillingService = require('./BillingService');
 const PathLabelsService = require('./PathLabelsService');
 const MLPoliciesService = require('./MultiLinkPoliciesService');
@@ -48,7 +47,6 @@ module.exports = {
   TokensService,
   AppIdentificationsService,
   TunnelsService,
-  UsersService,
   BillingService,
   PathLabelsService,
   MLPoliciesService,

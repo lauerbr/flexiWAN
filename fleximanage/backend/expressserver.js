@@ -26,11 +26,9 @@ const yamljs = require('yamljs');
 const express = require('express');
 const cors = require('./routes/cors');
 const cookieParser = require('cookie-parser');
-const bodyParser = require('body-parser');
 const OpenApiValidator = require('express-openapi-validator');
 const openapiRouter = require('./utils/openapiRouter');
 const createError = require('http-errors');
-// const session = require('express-session');
 const passport = require('passport');
 const auth = require('./authenticate');
 const { connectRouter } = require('./routes/connect');
@@ -70,7 +68,6 @@ const ticketsRouter = require('./routes/tickets')(
 const WebSocket = require('ws');
 const connections = require('./websocket/Connections')();
 const broker = require('./broker/broker.js');
-const roleSelector = require('./utils/roleSelector')(configs.get('redisUrl'));
 
 class ExpressServer {
   constructor (port, securePort, openApiYaml) {
@@ -101,28 +98,6 @@ class ExpressServer {
   }
 
   async setupMiddleware () {
-    // this.setupAllowedMedia();
-    // this.app.use((req, res, next) => {
-    //   console.log(`${req.method}: ${req.url}`);
-    //   return next();
-    // });
-
-    // A middleware that adds a unique request ID for each request
-    // or uses the existing request ID, if there is one.
-    // THIS MIDDLEWARE MUST BE ASSIGNED FIRST.
-    // this.app.use((req, res, next) => {
-    //   // Add unique ID to each request
-    //   req.id = req.get('X-Request-Id') || uuid();
-    //   res.set('X-Request-Id', req.id);
-
-    //   // Set the remote address IP on the request
-    //   req.ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-
-    //   next();
-    // });
-
-    // Request logging middleware - must be defined before routers.
-    this.app.use(reqLogger);
     // Needed to get the public IP if behind a proxy. Trust only the configured
     // number of hops / addresses, otherwise X-Forwarded-For can be spoofed by clients
     this.app.set('trust proxy', ExpressServer.getTrustProxySetting());
@@ -132,13 +107,6 @@ class ExpressServer {
 
     // Basic security headers
     this.app.use(ExpressServer.securityHeaders);
-
-    // Use morgan request logger in development mode
-    if (configs.get('environment') === 'development') this.app.use(morgan('dev'));
-
-    // Initialize websocket traffic handler role selector
-    // On every new websocket connection it will try to set itself as active
-    roleSelector.initializeSelector('websocketHandler');
 
     // Start periodic device tasks
     deviceStatus.start();
@@ -164,6 +132,20 @@ class ExpressServer {
       }
     });
 
+    // CORS headers for all requests
+    this.app.use(cors.cors);
+
+    // Static files and the client index, served before the request logger
+    // and the rate limiter. Routes allowed without authentication
+    this.app.get('/', (req, res, next) => this.sendIndexFile(req, res).catch(next));
+    this.app.use(express.static(path.join(__dirname, configs.get('clientStaticDir'))));
+
+    // Request logging middleware - must be defined before routers.
+    this.app.use(reqLogger);
+
+    // Use morgan request logger in development mode
+    if (configs.get('environment') === 'development') this.app.use(morgan('dev'));
+
     // Global rate limiter to protect against DoS attacks
     // Windows size of 5 minutes
     const inMemoryStore = new RateLimitStore(5 * 60 * 1000);
@@ -183,8 +165,6 @@ class ExpressServer {
     this.app.use(rateLimiter);
 
     // General settings here
-    this.app.use(cors.cors);
-    this.app.use(bodyParser.json());
     this.app.use(express.json());
     this.app.use(express.urlencoded({ extended: false }));
     this.app.use(cookieParser());
@@ -192,23 +172,6 @@ class ExpressServer {
     // Reject requests containing MongoDB operators (keys starting with '$')
     // in body, query or params, before any router is called
     this.app.use(mongoSanitizer);
-
-    // Routes allowed without authentication
-    this.app.get('/', (req, res) => this.sendIndexFile(req, res));
-    this.app.use(express.static(path.join(__dirname, configs.get('clientStaticDir'))));
-
-    // Secure traffic only
-    this.app.all('*', (req, res, next) => {
-      // Allow Let's encrypt certbot to access its certificate dirctory
-      if (!configs.get('shouldRedirectHttps', 'boolean') ||
-          req.secure || req.url.startsWith('/.well-known/acme-challenge')) {
-        return next();
-      } else {
-        return res.redirect(
-          307, 'https://' + req.hostname + ':' + configs.get('redirectHttpsPort') + req.url
-        );
-      }
-    });
 
     // no authentication
     this.app.use('/api/connect', connectRouter);
@@ -248,31 +211,11 @@ class ExpressServer {
 
     this.app.use(cors.corsWithOptions);
     this.app.use(auth.verifyUserJWT);
-    // this.app.use(auth.verifyPermission);
-
-    try {
-      // FIXME: temporary map the OLD routes
-      // this.app.use('/api/devices', require('./routes/devices'));
-      // this.app.use('/api/devicestats', require('./routes/deviceStats'));
-      // this.app.use('/api/jobs', require('./routes/deviceQueue'));
-      this.app.use('/api/portals', require('./routes/portals'));
-    } catch (error) {
-      logger.error('Error: Can\'t connect OLD routes');
-    }
 
     // Intialize routes
+    this.app.use('/api/portals', require('./routes/portals'));
     this.app.use('/api/admin', adminRouter);
     this.app.use('/api/tickets', ticketsRouter);
-
-    // reserved for future use
-    // this.app.get('/login-redirect', (req, res) => {
-    //   res.status(200);
-    //   res.json(req.query);
-    // });
-    // this.app.get('/oauth2-redirect.html', (req, res) => {
-    //   res.status(200);
-    //   res.json(req.query);
-    // });
 
     this.app.use(
       OpenApiValidator.middleware({
@@ -287,7 +230,22 @@ class ExpressServer {
     await this.launch();
   }
 
-  sendIndexFile (req, res) {
+  /**
+   * Get the client index.html file, cached until the file is modified
+   * @return {Promise<string>} index.html content
+   */
+  async getIndexFile () {
+    const indexPath = path.join(__dirname, configs.get('clientStaticDir'), 'index.html');
+    const { mtimeMs } = await fs.promises.stat(indexPath);
+    if (!this.indexCache || this.indexCache.mtimeMs !== mtimeMs) {
+      const content = (await fs.promises.readFile(indexPath)).toString();
+      // transformed index per client configuration
+      this.indexCache = { mtimeMs, content, transformed: new Map() };
+    }
+    return this.indexCache;
+  }
+
+  async sendIndexFile (req, res) {
     // get client config based on request object
     const clientConfig = configs.getClientConfig(req);
 
@@ -307,9 +265,15 @@ class ExpressServer {
       return modifiedIndex;
     };
 
-    const indexFile =
-        fs.readFileSync(path.join(__dirname, configs.get('clientStaticDir'), 'index.html'));
-    const transformedIndex = transformIndex(indexFile.toString());
+    // The client configuration depends only on the configured servers used by the request,
+    // so the number of cached versions is bounded
+    const { content, transformed } = await this.getIndexFile();
+    const cacheKey = JSON.stringify(clientConfig);
+    let transformedIndex = transformed.get(cacheKey);
+    if (transformedIndex === undefined) {
+      transformedIndex = transformIndex(content);
+      if (transformed.size < 100) transformed.set(cacheKey, transformedIndex);
+    }
     res.send(transformedIndex);
   }
 
@@ -317,7 +281,7 @@ class ExpressServer {
     // "catchall" handler, for any request that doesn't match one above, send back index.html file.
     this.app.get('*', (req, res, next) => {
       logger.info('Route not found', { req: req });
-      this.sendIndexFile(req, res);
+      this.sendIndexFile(req, res).catch(next);
     });
 
     // catch 404 and forward to error handler

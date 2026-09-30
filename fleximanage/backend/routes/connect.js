@@ -18,7 +18,6 @@
 const configs = require('../configs.js')();
 const express = require('express');
 const createError = require('http-errors');
-const bodyParser = require('body-parser');
 const cors = require('./cors');
 const tokens = require('../models/tokens');
 const { devices } = require('../models/devices');
@@ -35,7 +34,7 @@ const { mapLteNames, getCpuInfo } = require('../utils/deviceUtils');
 const geoip = require('geoip-lite');
 const validators = require('../models/validators.js');
 const connectRouter = express.Router();
-connectRouter.use(bodyParser.json());
+connectRouter.use(express.json());
 
 // error formatter
 const formatErr = (err, msg) => {

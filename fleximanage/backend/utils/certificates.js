@@ -18,7 +18,9 @@
 const EasyRSA = require('easyrsa').default;
 const forge = require('node-forge');
 const fs = require('fs');
-const { randomBytes } = require('crypto');
+const { randomBytes, generateKeyPair } = require('crypto');
+const { promisify } = require('util');
+const generateKeyPairAsync = promisify(generateKeyPair);
 const logger = require('../logging/logging')({ module: module.filename, type: 'req' });
 
 const deleteFolderRecursive = path => {
@@ -37,6 +39,22 @@ const deleteFolderRecursive = path => {
   fs.rmdirSync(path);
 };
 
+/**
+ * Generate an RSA private key with the native (non blocking) node crypto,
+ * easyrsa generates the keys in pure javascript on the main thread
+ * @param  {number} bits key size
+ * @return {Promise<string>} private key in PKCS#1 PEM format
+ */
+const generateRsaPrivateKey = async (bits = 2048) => {
+  const { privateKey } = await generateKeyPairAsync('rsa', {
+    modulusLength: bits,
+    publicExponent: 0x10001,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' }
+  });
+  return privateKey;
+};
+
 const generateRemoteVpnPKI = async (orgName) => {
   const res = {
     caCert: null,
@@ -47,6 +65,16 @@ const generateRemoteVpnPKI = async (orgName) => {
     clientKey: null
   };
 
+  let caPrivateKey, serverPrivateKey, clientPrivateKey;
+  try {
+    [caPrivateKey, serverPrivateKey, clientPrivateKey] = await Promise.all([
+      generateRsaPrivateKey(), generateRsaPrivateKey(), generateRsaPrivateKey()
+    ]);
+  } catch (err) {
+    logger.error('failed to create keys', { params: { orgName, err: err.message } });
+    throw new Error('An error occurred while creating the keys for your organization');
+  }
+
   return new Promise((resolve, reject) => {
     const pkiDir = `tmp/openvpn_pki/${orgName}`;
 
@@ -56,20 +84,20 @@ const generateRemoteVpnPKI = async (orgName) => {
     const easyrsa = new EasyRSA({ pkiDir: pkiDir });
     easyrsa.initPKI()
       .then(t => {
-        return easyrsa.buildCA();
+        return easyrsa.buildCA({ privateKey: caPrivateKey });
       })
       .then(data => {
         res.caCert = forge.pki.certificateToPem(data.cert);
         res.caKey = forge.pki.privateKeyToPem(data.privateKey);
 
         const commonName = 'server';
-        return easyrsa.createServer({ commonName, nopass: true });
+        return easyrsa.createServer({ commonName, nopass: true, privateKey: serverPrivateKey });
       }).then((data) => {
         res.serverCert = forge.pki.certificateToPem(data.cert);
         res.serverKey = forge.pki.privateKeyToPem(data.privateKey);
 
         const commonName = 'client';
-        return easyrsa.createClient({ commonName, nopass: true });
+        return easyrsa.createClient({ commonName, nopass: true, privateKey: clientPrivateKey });
       })
       .then((data) => {
         res.clientCert = forge.pki.certificateToPem(data.cert);

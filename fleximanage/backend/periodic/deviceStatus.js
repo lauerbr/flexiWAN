@@ -34,6 +34,71 @@ const { getMajorVersion, getMinorVersion } = require('../versioning');
 const { createClient } = require('redis');
 const { getRedisAuthUrl } = require('../utils/httpUtils');
 
+// Schema of a get-device-stats response entry, built once at module load
+const devStatsSchema = Joi.object().keys({
+  ok: Joi.number().integer().required(),
+  running: Joi.boolean().optional(),
+  // TBD : when v0.X.X not supported, change to required
+  state: Joi.string().valid('running', 'stopped', 'failed').optional(),
+  // stateReason:  Joi.string().regex(/^[a-zA-Z0-9]{0,200}$/i).allow('').optional(),
+  // TBD: Now no validation, need to fix on agent
+  stateReason: Joi.string().allow('').optional(),
+  period: Joi.number().required(),
+  utc: Joi.date().timestamp('unix').required(),
+  tunnel_stats: Joi.object().optional(),
+  application_stats: Joi.object().optional(),
+  lte_stats: Joi.object().optional(),
+  wifi_stats: Joi.object().optional(),
+  alerts: Joi.object().optional(),
+  alerts_hash: Joi.string().allow('').optional(),
+  reconfig: Joi.string().allow('').optional(),
+  ikev2: Joi.object({
+    certificateExpiration: Joi.string().allow('').optional(),
+    error: Joi.string().allow('').optional()
+  }).allow({}).optional(),
+  health: Joi.object({
+    cpu: Joi.array().items(Joi.number()).min(1).optional(),
+    mem: Joi.number().optional(),
+    disk: Joi.number().optional(),
+    temp: Joi.object({
+      value: Joi.number(),
+      high: Joi.number(),
+      critical: Joi.number()
+    }).optional()
+  }).allow({}).optional(),
+  stats: Joi.object().pattern(/^[a-z0-9:._/-]{1,64}$/i, Joi.object({
+    rx_bytes: Joi.number().required(),
+    rx_pkts: Joi.number().required(),
+    tx_bytes: Joi.number().required(),
+    tx_pkts: Joi.number().required()
+  })),
+  vrrp: Joi.object().pattern(Joi.number().min(1).max(255), Joi.object({
+    state: Joi.string().valid('Master', 'Backup', 'Initialize', 'Interface Down'),
+    adjusted_priority: Joi.number().min(0).max(255).optional()
+  })).allow({}).optional(),
+  bgp: Joi.object({
+    routerId: Joi.string(),
+    as: Joi.number(),
+    failedPeers: Joi.number(),
+    displayedPeers: Joi.number(),
+    totalPeers: Joi.number(),
+    peers: Joi.object().pattern(Joi.string().ip({ version: ['ipv4'] }), Joi.object({
+      remoteAs: Joi.number(),
+      msgRcvd: Joi.number(),
+      msgSent: Joi.number(),
+      peerUptime: Joi.string(),
+      peerUptimeMsec: Joi.number(),
+      pfxRcd: Joi.number(),
+      pfxSnt: Joi.number(),
+      state: Joi.string(),
+      peerState: Joi.string()
+    }))
+  }).allow({}).optional()
+});
+
+// How long to cache the organization encryption method used by the stats poll, in msec
+const ORG_CACHE_TTL = 60000;
+
 /***
  * This class gets periodic status from all connected devices
  ***/
@@ -57,6 +122,8 @@ class DeviceStatus {
       ['drop_rate', 'drop_rate']
     ]);
     this.lastApplicationsStatusTime = {};
+    // orgId => { encryptionMethod, expires }
+    this.orgEncryptionCache = new Map();
     this.statsPollPeriod = configs.get('statsPollPeriod', 'number');
     this.statsTimeout = configs.get('statsTimeout', 'number');
 
@@ -126,67 +193,6 @@ class DeviceStatus {
     };
 
     if (msg.length === 0) return { valid: true, err: '' };
-
-    const devStatsSchema = Joi.object().keys({
-      ok: Joi.number().integer().required(),
-      running: Joi.boolean().optional(),
-      // TBD : when v0.X.X not supported, change to required
-      state: Joi.string().valid('running', 'stopped', 'failed').optional(),
-      // stateReason:  Joi.string().regex(/^[a-zA-Z0-9]{0,200}$/i).allow('').optional(),
-      // TBD: Now no validation, need to fix on agent
-      stateReason: Joi.string().allow('').optional(),
-      period: Joi.number().required(),
-      utc: Joi.date().timestamp('unix').required(),
-      tunnel_stats: Joi.object().optional(),
-      application_stats: Joi.object().optional(),
-      lte_stats: Joi.object().optional(),
-      wifi_stats: Joi.object().optional(),
-      alerts: Joi.object().optional(),
-      alerts_hash: Joi.string().allow('').optional(),
-      reconfig: Joi.string().allow('').optional(),
-      ikev2: Joi.object({
-        certificateExpiration: Joi.string().allow('').optional(),
-        error: Joi.string().allow('').optional()
-      }).allow({}).optional(),
-      health: Joi.object({
-        cpu: Joi.array().items(Joi.number()).min(1).optional(),
-        mem: Joi.number().optional(),
-        disk: Joi.number().optional(),
-        temp: Joi.object({
-          value: Joi.number(),
-          high: Joi.number(),
-          critical: Joi.number()
-        }).optional()
-      }).allow({}).optional(),
-      stats: Joi.object().pattern(/^[a-z0-9:._/-]{1,64}$/i, Joi.object({
-        rx_bytes: Joi.number().required(),
-        rx_pkts: Joi.number().required(),
-        tx_bytes: Joi.number().required(),
-        tx_pkts: Joi.number().required()
-      })),
-      vrrp: Joi.object().pattern(Joi.number().min(1).max(255), Joi.object({
-        state: Joi.string().valid('Master', 'Backup', 'Initialize', 'Interface Down'),
-        adjusted_priority: Joi.number().min(0).max(255).optional()
-      })).allow({}).optional(),
-      bgp: Joi.object({
-        routerId: Joi.string(),
-        as: Joi.number(),
-        failedPeers: Joi.number(),
-        displayedPeers: Joi.number(),
-        totalPeers: Joi.number(),
-        peers: Joi.object().pattern(Joi.string().ip({ version: ['ipv4'] }), Joi.object({
-          remoteAs: Joi.number(),
-          msgRcvd: Joi.number(),
-          msgSent: Joi.number(),
-          peerUptime: Joi.string(),
-          peerUptimeMsec: Joi.number(),
-          pfxRcd: Joi.number(),
-          pfxSnt: Joi.number(),
-          state: Joi.string(),
-          peerState: Joi.string()
-        }))
-      }).allow({}).optional()
-    });
 
     for (const updateEntry of msg) {
       const result = devStatsSchema.validate(updateEntry);
@@ -297,17 +303,21 @@ class DeviceStatus {
    * @param {string} severity - The severity of the alert (e.g., 'warning' or 'critical').
    * @param {string} org - Organization ID or name associated with the alert.
    * @param {number} [tunnelId=null] - tunnel ID to fetch tunnel-specific threshold settings.
-   * @returns {Object} Returns an object containing the threshold value and unit.
+   * @returns {Promise<Object>} Resolves to an object containing the threshold value and unit.
   */
-  getThresholdInfo (
+  async getThresholdInfo (
     alertKey, notificationsConfRules, severity, org, tunnelId = null) {
     const thresholdType = (severity === 'warning') ? 'warningThreshold' : 'criticalThreshold';
+    const orgThreshold = notificationsConfRules[alertKey][thresholdType];
 
-    const thresholdValue = tunnelId
-      ? (tunnels.findOne(
-        { num: tunnelId, org }, { fields: { notificationsSettings: 1 } }
-      )?.notificationsSettings?.[thresholdType] ?? notificationsConfRules[alertKey][thresholdType])
-      : notificationsConfRules[alertKey][thresholdType];
+    let thresholdValue = orgThreshold;
+    if (tunnelId) {
+      // tunnel specific settings override the organization settings
+      const tunnel = await tunnels.findOne(
+        { num: tunnelId, org }, { notificationsSettings: 1 }
+      ).lean();
+      thresholdValue = tunnel?.notificationsSettings?.[alertKey]?.[thresholdType] ?? orgThreshold;
+    }
 
     const thresholdUnit = notificationsConfRules[alertKey].thresholdUnit;
 
@@ -344,14 +354,14 @@ class DeviceStatus {
         if (alerts[alertName].type === 'device') {
           if ((!lastUpdateEntry.alerts[alertName] ||
             lastUpdateEntry.alerts[alertName].severity !== alerts[alertName].severity)) {
-            const agentAlertsInfo = this.getThresholdInfo(
+            const agentAlertsInfo = await this.getThresholdInfo(
               alertName, notificationsConfRules, alerts[alertName].severity, deviceInfo.org);
             this.createAndSendNotification(
               deviceInfo, alerts, alertName,
               agentAlertsInfo, null, true);
           }
         } else {
-          this.resolveTunnelAlerts(
+          await this.resolveTunnelAlerts(
             alertName, alerts, lastUpdateEntry, deviceInfo, notificationsConfRules);
         }
       }
@@ -376,7 +386,8 @@ class DeviceStatus {
    * @param {Object} deviceInfo - Detailed information about the device in memory.
    * @param {Object} notificationsConfRules - Settings object from the db.
   */
-  resolveTunnelAlerts (alertKey, alerts, lastUpdateEntry, deviceInfo, notificationsConfRules) {
+  async resolveTunnelAlerts (
+    alertKey, alerts, lastUpdateEntry, deviceInfo, notificationsConfRules) {
     for (const tunnelId in alerts[alertKey]) {
       const alertExistsForTunnel = lastUpdateEntry.alerts[alertKey]?.[tunnelId];
       const severityHasChanged = alertExistsForTunnel &&
@@ -386,7 +397,7 @@ class DeviceStatus {
        !alertExistsForTunnel || severityHasChanged;
 
       if (shouldResolveTunnelAlert) {
-        const agentAlertsInfo = this.getThresholdInfo(
+        const agentAlertsInfo = await this.getThresholdInfo(
           alertKey,
           notificationsConfRules,
           alerts[alertKey][tunnelId].severity,
@@ -538,7 +549,7 @@ class DeviceStatus {
    * @throws Will throw an error if the notification configuration retrieval / alert handling fails.
   */
   async calculateNotifications (deviceID, deviceInfo, lastUpdateEntry) {
-    const orgNotificationsConf = await notificationsConf.findOne({ org: deviceInfo.org });
+    const orgNotificationsConf = await notificationsConf.findOne({ org: deviceInfo.org }).lean();
     for (const alertName in lastUpdateEntry.alerts) {
       if (alertName.toLowerCase().includes('tunnel')) {
         for (const tunnelId in lastUpdateEntry.alerts[alertName]) {
@@ -639,6 +650,11 @@ class DeviceStatus {
                   deviceID, 'notificationsHash', lastUpdateEntry.alerts_hash);
                 connections.devices.updateDeviceInfo(
                   deviceID, 'alerts', lastUpdateEntry.alerts);
+              }).catch((err) => {
+                logger.error('Failed to calculate device notifications', {
+                  params: { deviceID: deviceID, err: err.message },
+                  periodic: { task: this.taskInfo }
+                });
               });
             }
 
@@ -650,7 +666,7 @@ class DeviceStatus {
             );
             // check if need to generate a new IKEv2 certificate
             let needNewIKEv2Certificate = false;
-            const { encryptionMethod } = await orgModel.findOne({ _id: deviceInfo.org });
+            const encryptionMethod = await this.getOrgEncryptionMethod(deviceInfo.org);
 
             if (encryptionMethod === 'ikev2') {
               const { ikev2 } = lastUpdateEntry;
@@ -718,6 +734,30 @@ class DeviceStatus {
         connections.devices.updateDeviceInfo(deviceID, 'statsSentTime', undefined, false);
         connections.devices.updateDeviceInfo(deviceID, 'statsCompleteTime', Date.now(), false);
       });
+  }
+
+  /**
+   * Get the organization encryption method, cached for a short time as it is
+   * checked for every device on every stats poll
+   * @param  {ObjectId} org organization id
+   * @return {Promise<string>} encryption method
+   */
+  async getOrgEncryptionMethod (org) {
+    const key = org.toString();
+    const now = Date.now();
+    const cached = this.orgEncryptionCache.get(key);
+    if (cached && cached.expires > now) return cached.encryptionMethod;
+
+    const orgDoc = await orgModel.findOne({ _id: org }, { encryptionMethod: 1 }).lean();
+    const encryptionMethod = orgDoc?.encryptionMethod;
+    this.orgEncryptionCache.set(key, { encryptionMethod, expires: now + ORG_CACHE_TTL });
+    // prevent unbounded growth, remove expired entries
+    if (this.orgEncryptionCache.size > 1000) {
+      for (const [k, v] of this.orgEncryptionCache) {
+        if (v.expires <= now) this.orgEncryptionCache.delete(k);
+      }
+    }
+    return encryptionMethod;
   }
 
   async updateDeviceSyncStatus (org, deviceId, machineId, hash) {

@@ -23,19 +23,6 @@ const { getOrgDefaultTunnelPort } = require('../utils/tunnelUtils');
 const SHA1 = require('crypto-js/sha1');
 
 /**
- * Get the default gateway of the device
- * @param {Object}  device
- * @return {string} defaultRouter
- */
-const getDefaultGateway = device => {
-  const defaultIfc = device.interfaces.reduce((d, i) => {
-    return i.type !== 'WAN' || i.routing !== 'NONE' || !i.gateway ||
-      (d && Number(d.metric) < Number(i.metric)) ? d : i;
-  }, false);
-  return !defaultIfc ? device.defaultRoute : defaultIfc.gateway;
-};
-
-/**
  * Checks whether a value is empty
  * @param  {string}  val the value to be checked
  * @return {boolean}     true if the value is empty, false otherwise
@@ -600,7 +587,6 @@ const validateFirewallRules = (rules, org, interfaces = []) => {
 
 // Default exports
 module.exports = {
-  getDefaultGateway,
   getBridges,
   mapLteNames,
   parseLteStatus,

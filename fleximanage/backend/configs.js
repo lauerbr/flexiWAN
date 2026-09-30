@@ -83,6 +83,18 @@ const configEnv = {
     mongoBillingUrl: `mongodb://${hostname}:27017,${hostname}:27018,${hostname}:27019/flexibilling?replicaSet=rs`,
     // Mongo VPN database
     mongoVpnUrl: `mongodb://${hostname}:27017,${hostname}:27018,${hostname}:27019/flexivpn?replicaSet=rs`,
+    // Max number of connections in each mongoose connection pool (main/analytics/vpn)
+    mongoPoolSize: 20,
+    // Let mongoose build the indexes defined in the schemas on startup.
+    // New indexes are also created by the database migrations, so this can be
+    // disabled on large production deployments to avoid index builds on startup
+    mongoAutoIndex: true,
+    // High availability leader lock TTL in msec. The lock is renewed every third of the TTL,
+    // a standby instance becomes active at most this time after the active one stops
+    haLeaderTtl: 12000,
+    // Keep the device limiters state (reconfig errors, public address changes) in redis,
+    // shared by all flexiManage instances. When false, each instance keeps its own state
+    limitersUseRedis: true,
     // Billing Redirect OK page url
     billingRedirectOkUrl: 'https://local.flexiwan.com/ok.html',
     // Biling config site - this is used as the billing site name in ChargeBee
@@ -298,7 +310,9 @@ const configEnv = {
     agentApiVersion: '6.0.0',
     // Kue prefix
     kuePrefix: 'testq',
-    logLevel: 'debug'
+    logLevel: 'debug',
+    // unit tests use in-memory limiters
+    limitersUseRedis: false
   },
   // Override for production environment
   production: {

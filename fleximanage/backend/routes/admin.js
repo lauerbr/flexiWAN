@@ -16,7 +16,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('./cors');
 const auth = require('../authenticate');
 const connections = require('../websocket/Connections')();
@@ -29,7 +28,7 @@ const logger = require('../logging/logging')({ module: module.filename, type: 'r
 const keyBy = require('lodash/keyBy');
 
 const adminRouter = express.Router();
-adminRouter.use(bodyParser.json());
+adminRouter.use(express.json());
 
 /**
  * This route is allowed only if the organization is marked as admin
@@ -264,18 +263,20 @@ adminRouter
     // 1. Open websocket connections and connection info
     const devices = connections.getAllDevices();
     result.numConnectedDevices = devices.length;
+    // map organization id => { account, org }, first account wins
+    const orgsMap = new Map();
+    for (const a of accounts.data) {
+      for (const ao of a.organizations) {
+        const orgId = ao.organization_id.toString();
+        if (!orgsMap.has(orgId)) orgsMap.set(orgId, { account: a, org: ao });
+      }
+    }
     devices.forEach(deviceMachineId => {
       const deviceInfo = connections.getDeviceInfo(deviceMachineId);
       const devStatus = deviceStatus.getDeviceStatus(deviceMachineId);
 
-      let deviceOrg = null;
-      const account = accounts.data.find(a => {
-        const org = a.organizations.find(ao => ao.organization_id.toString() === deviceInfo.org);
-        if (org) {
-          deviceOrg = org;
-        }
-        return org !== undefined;
-      });
+      const { account = null, org: deviceOrg = null } =
+        (typeof deviceInfo.org === 'string' && orgsMap.get(deviceInfo.org)) || {};
       result.connectedDevices.push({
         machineID: deviceMachineId,
         status: devStatus ? devStatus.state : 'unknown',

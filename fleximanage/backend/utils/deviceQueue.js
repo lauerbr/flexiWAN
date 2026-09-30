@@ -130,6 +130,13 @@ class DeviceQueues {
       this.resumeQueue(deviceId);
       return;
     }
+    if (this.deviceQueues[deviceId]) {
+      // The processor is already registered and waits for the init job to get the context,
+      // kue workers can't be removed, registering another one would add a worker
+      // (and event listeners) for the same device
+      logger.debug('Device queue is starting, waiting for context', { params: { deviceId } });
+      return;
+    }
 
     // Initialize queue info
     const queueInfo = {
@@ -403,8 +410,10 @@ class DeviceQueues {
      * @param  {integer}  to       index to end looking from (could be negative)
      * @param  {string}   dir      order to return data 'asc' or 'desc'
      * @param  {integer}  limit    limit the number of processed jobs, -1 for no limit
-     *                             the callback should return 'true' for processed job
-     * @param  {boolean}  isDelete job will be deleted in the callback
+     *                             the callback should return 'true' (or a promise
+     *                             resolved to 'true') for processed job
+     * @param  {boolean}  isDelete processed jobs are removed from the iterated state
+     *                             in the callback
      * @return {void}
      */
   iterateJobs (state, callback, deviceId = null, from = 0, to = -1, dir = 'asc', limit = -1,
@@ -415,16 +424,21 @@ class DeviceQueues {
       // Define single batch Iteration
       const singleBatchIteration = (batchFrom, batchTo) => {
         return new Promise((resolve, reject) => {
-          const handleFunc = (err, jobs) => {
+          const handleFunc = async (err, jobs) => {
             if (err) {
               return reject(
                 new Error('DeviceQueues: Iteration error, state=' + state + ', err=' + err)
               );
             }
-            for (const job of jobs) {
-              if (limit > 0 && done >= limit) break;
-              if (callback(job)) done += 1;
-            };
+            try {
+              for (const job of jobs) {
+                if (limit > 0 && done >= limit) break;
+                // the callback may be async, wait for it before getting the next batch
+                if (await callback(job)) done += 1;
+              };
+            } catch (err) {
+              return reject(err);
+            }
             resolve();
           };
           // if jobs are removed after single batch iteration
@@ -523,7 +537,7 @@ class DeviceQueues {
         if (deviceFilters.length === 1) deviceId = deviceFilters[0].val;
       }
 
-      const orgCallback = (orgJob) => {
+      const orgCallback = async (orgJob) => {
         // need to prepare the job the same way it is returned in the service
         const jobObj = { ...orgJob, _id: orgJob.id, state: orgJob._state };
         if (devicesByMachineId[orgJob.type] !== undefined) {
@@ -532,7 +546,7 @@ class DeviceQueues {
         if (orgJob.data.metadata.org === org && (!filters || passFilters(jobObj, filters))) {
           if (skipped < skip) skipped += 1;
           else {
-            if (callback(orgJob)) return true; // job done
+            if (await callback(orgJob)) return true; // job done
           }
         }
         return false;
@@ -555,11 +569,15 @@ class DeviceQueues {
    */
   getOneJob (id, callback) {
     return new Promise((resolve, reject) => {
-      kue.Job.get(id, (err, job) => {
+      kue.Job.get(id, async (err, job) => {
         if (err) return reject(err);
-        const result = callback(job);
-        if (result.error) reject(new Error(result.message));
-        resolve(job);
+        try {
+          const result = await callback(job);
+          if (result.error) return reject(new Error(result.message));
+          resolve(job);
+        } catch (err) {
+          reject(err);
+        }
       });
     });
   }
@@ -572,21 +590,52 @@ class DeviceQueues {
      * @return {void}
      */
   async iterateJobsIdsByOrg (org, jobIDs, callback) {
-    const promises = [];
-    jobIDs.forEach(async (id) => {
-      promises.push(this.getOneJob(id, (job) => {
-        if (!job) {
-          return { error: true, message: `Job ${id} not found` };
-        }
-        if (!(job.data.metadata.org === org)) {
-          return { error: true, message: 'Job not found in org' };
-        }
-        callback(job);
-        return { error: false, message: '' };
-      }));
-    });
+    const promises = jobIDs.map(id => this.getOneJob(id, async (job) => {
+      if (!job) {
+        return { error: true, message: `Job ${id} not found` };
+      }
+      if (!(job.data.metadata.org === org)) {
+        return { error: true, message: 'Job not found in org' };
+      }
+      await callback(job);
+      return { error: false, message: '' };
+    }));
     const results = await Promise.all(promises);
     return results;
+  }
+
+  /**
+   * Removes a job and calls the registered remove callback
+   * @param  {Object} job kue job
+   * @return {Promise} resolved when the job is removed
+   */
+  removeJob (job) {
+    return new Promise((resolve, reject) => {
+      job.remove((err) => {
+        if (err) return reject(err);
+        const { method } = job.data.response ?? {};
+        this.callRemoveRegisteredCallback(method, job);
+        resolve(job);
+      });
+    });
+  }
+
+  /**
+   * Sets a job state to failed, and calls the registered error callback
+   * @param  {Object} job    kue job
+   * @param  {string} reason error message
+   * @return {Promise} resolved when the job is updated
+   */
+  failJob (job, reason) {
+    return new Promise((resolve, reject) => {
+      job.failed((err) => {
+        if (err) return reject(err);
+        job.error(reason);
+        const { method } = job.data.response ?? {};
+        this.callErrorRegisteredCallback(method, job);
+        resolve(job);
+      });
+    });
   }
 
   /**
@@ -597,11 +646,7 @@ class DeviceQueues {
      */
   async removeJobIdsByOrg (org, jobIDs) {
     try {
-      await this.iterateJobsIdsByOrg(org, jobIDs, async (job) => {
-        const removedJob = await job.remove(function (err) { if (err) throw err; });
-        const { method } = removedJob.data.response;
-        this.callRemoveRegisteredCallback(method, removedJob);
-      });
+      await this.iterateJobsIdsByOrg(org, jobIDs, (job) => this.removeJob(job));
     } catch (err) {
       logger.warn('Encountered an error while removing jobs', {
         params: { org: org, jobIDs: jobIDs, err: err.message }
@@ -621,9 +666,7 @@ class DeviceQueues {
     try {
       const isDelete = true;
       await this.iterateJobsByOrg(org, 'all', async (job) => {
-        const removedJob = await job.remove(err => { if (err) throw err; });
-        const { method } = removedJob.data.response;
-        this.callRemoveRegisteredCallback(method, removedJob);
+        await this.removeJob(job);
         return true;
       }, 0, -1, 'asc', 0, -1, filters, isDelete, devicesByMachineId);
     } catch (err) {
@@ -641,10 +684,10 @@ class DeviceQueues {
    * @return {Promise}         a list of job ids of pending jobs
    */
   async getOPendingJobsCount (deviceId) {
-    let activeCount = 0;
-    let inactiveCount = 0;
-    await this.iterateJobs('active', j => j._state === 'active' && activeCount++, deviceId);
-    await this.iterateJobs('inactive', j => j._state === 'inactive' && inactiveCount++, deviceId);
+    const [activeCount, inactiveCount] = await Promise.all([
+      this.getCount('active', deviceId),
+      this.getCount('inactive', deviceId)
+    ]);
     // this function is called when updating the sync status of connected devices
     // no active job with existing inactive jobs means the queue stuck
     if (activeCount === 0 && inactiveCount > 0) {
@@ -711,13 +754,14 @@ class DeviceQueues {
   async removeJobs (state, createdBefore = 3600000) {
     try {
       const now = new Date().getTime();
+      // removed jobs are counted, so the iteration can skip them (isDelete)
       await this.iterateJobs(state, async (job) => {
         if (now - job.created_at > createdBefore) {
-          const removedJob = await job.remove(function (err) { if (err) throw err; });
-          const { method } = removedJob.data.response;
-          this.callRemoveRegisteredCallback(method, removedJob);
+          await this.removeJob(job);
+          return true;
         }
-      });
+        return false;
+      }, null, 0, -1, 'asc', -1, true);
     } catch (err) {
       logger.warn('Encountered an error while removing old jobs', {
         params: { state: state, createdBefore: createdBefore, err: err.message }
@@ -736,14 +780,14 @@ class DeviceQueues {
   async failedJobs (state, createdBefore = 3600000) {
     try {
       const now = new Date().getTime();
+      // failed jobs are moved out of the iterated state (isDelete)
       await this.iterateJobs(state, async (job) => {
         if (now - job.created_at > createdBefore) {
-          const failedJob = await job.failed(function (err) { if (err) throw err; });
-          await job.error('Error: Dangle Waiting');
-          const { method } = failedJob.data.response;
-          this.callErrorRegisteredCallback(method, failedJob);
+          await this.failJob(job, 'Error: Dangle Waiting');
+          return true;
         }
-      });
+        return false;
+      }, null, 0, -1, 'asc', -1, state !== 'failed');
     } catch (err) {
       logger.warn('Encountered an error while setting failure for old jobs', {
         params: { state: state, createdBefore: createdBefore, err: err.message }

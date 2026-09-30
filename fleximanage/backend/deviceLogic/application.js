@@ -31,6 +31,7 @@ const deviceQueues = require('../utils/deviceQueue')(
 const modifyDeviceApply = require('./modifyDevice').apply;
 
 const appsLogic = require('../applicationLogic/applications')();
+const keyBy = require('lodash/keyBy');
 
 const handleInstallOp = async (app, device, deviceConfiguration, idx) => {
   await device.populate('policies.firewall.policy', '_id name rules').execPopulate();
@@ -302,11 +303,17 @@ const queueApplicationJob = async (
     return jobs;
   }
 
+  // get all selected devices in one query
+  const devicesById = keyBy(
+    await devices.find({ _id: { $in: deviceList.map(d => d._id) } }),
+    d => d._id.toString()
+  );
+
   // generate job for each selected device
   for (let i = 0; i < deviceList.length; i++) {
     const dev = deviceList[i];
 
-    const newDevice = await devices.findOne({ _id: dev._id });
+    const newDevice = devicesById[dev._id.toString()] ?? null;
     let tasks = await appsLogic.getTasks(newDevice, application, op);
 
     if (tasks.length > 1) {

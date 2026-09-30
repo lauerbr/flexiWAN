@@ -168,12 +168,13 @@ notificationsSchema.index(
     partialFilterExpression: { status: 'read' }
   }
 );
-notificationsSchema.index({ org: 1 });
+// { org: 1 } and { org: 1, resolved: 1 } are prefixes of { org: 1, resolved: 1, eventType: 1 }
+// and were dropped by the add_performance_indexes migration
 notificationsSchema.index({ account: 1 });
 notificationsSchema.index({ status: 1 });
 notificationsSchema.index({ eventType: 1, org: 1 }); // helps in heavy queries of notifications
-notificationsSchema.index({ org: 1, resolved: 1 }); // helps in heavy queries of notifications
-notificationsSchema.index({ org: 1, resolved: 1, eventType: 1 });
+notificationsSchema.index({ org: 1, resolved: 1, eventType: 1 }); // helps in heavy queries
+notificationsSchema.index({ 'targets.deviceId': 1 });
 notificationsSchema.index({ org: 1, eventType: 1, targets: 1 });
 notificationsSchema.index({ org: 1, eventType: 1, 'targets.tunnelId': 1 });
 

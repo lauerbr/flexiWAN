@@ -32,8 +32,9 @@ const users = require('../models/users');
 const { ObjectId } = require('mongodb');
 const { apply } = require('../deviceLogic/deviceNotifications');
 const keyBy = require('lodash/keyBy');
+const groupBy = require('lodash/groupBy');
 const notificationsMgr = require('../notifications/notifications')();
-const { validateNotificationsSettings, validateNotificationsThresholds, validateEmailNotifications, validateWebhookSettings } = require('../models/validators');
+const { validateNotificationsSettings, validateEmailNotifications, validateWebhookSettings } = require('../models/validators');
 const mongoConns = require('../mongoConns.js')();
 const createError = require('http-errors');
 
@@ -462,34 +463,6 @@ class NotificationsService {
   }
 
   /**
-  * Send the notifications settings of numeric fields to validation
-  * If one of the new fields value is "varies" it means we should use the original value
-  * in the validation in order to make sure that the other value is valid (bigger/smaller than the other)
-  * @param newRulesEventSettings Object of a specific event type settings, sent by the user
-  * @param currentRuleEventSettings Object of a specific event type settings, taken from the original organization settings
-  **/
-  static validateThresholds (newRulesEventSettings, currentRuleEventSettings, eventName) {
-    let { warningThreshold, criticalThreshold } = newRulesEventSettings;
-    if (warningThreshold === 'varies') {
-      warningThreshold = currentRuleEventSettings.warningThreshold;
-    }
-
-    if (criticalThreshold === 'varies') {
-      criticalThreshold = currentRuleEventSettings.criticalThreshold;
-    }
-
-    const validRule = validateNotificationsThresholds({ [eventName]: { warningThreshold, criticalThreshold } });
-
-    if (!validRule.valid) {
-      throw new CustomError({
-        status: 400,
-        message: 'Invalid notification settings',
-        data: validRule.errors
-      });
-    }
-  }
-
-  /**
   * Modify the notifications settings of a given organization/account/group
   * @param org String organization ID
   * @param account String account ID
@@ -557,8 +530,13 @@ class NotificationsService {
       let devicesShouldReceiveJobs = 0;
       const applyPromises = [];
       let fulfilledJobs = 0;
+      // get the devices of all updated organizations in one query
+      const devicesByOrg = groupBy(
+        await devices.find({ org: { $in: [...updatedNotificationsByOrg.keys()] } }),
+        d => d.org.toString()
+      );
       for (const [orgId, notificationsSettings] of updatedNotificationsByOrg.entries()) {
-        const orgDevices = await devices.find({ org: orgId });
+        const orgDevices = devicesByOrg[orgId.toString()] ?? [];
         devicesShouldReceiveJobs += orgDevices.length;
         const data = {
           rules: notificationsSettings,
@@ -573,10 +551,10 @@ class NotificationsService {
           fulfilledJobs += ids.length;
         }
       }
-      const status = fulfilledJobs < devicesShouldReceiveJobs.length
+      const status = fulfilledJobs < devicesShouldReceiveJobs
         ? 'partially completed' : 'completed';
-      const message = fulfilledJobs < devicesShouldReceiveJobs.length
-        ? `Warning: ${fulfilledJobs} of ${devicesShouldReceiveJobs.length} Set device's notifications job added.`
+      const message = fulfilledJobs < devicesShouldReceiveJobs
+        ? `Warning: ${fulfilledJobs} of ${devicesShouldReceiveJobs} Set device's notifications job added.`
         : 'The notifications were updated successfully';
       return Service.successResponse(
         { status, message }, 202
@@ -690,6 +668,8 @@ class NotificationsService {
       }
       let response = [];
       const uniqueUsers = new Set();
+      // A map for storing usersData, shared by all organizations
+      const usersDataMap = new Map();
 
       const processOrganization = async (orgId, isViewer) => {
         const orgData = await Organizations.find({ _id: orgId });
@@ -704,19 +684,24 @@ class NotificationsService {
         });
 
         const notificationsData = await notificationsConf.find({ org: orgId });
-        // A map for storing usersData
-        const usersDataMap = new Map();
+
+        // get the data of all new members in one query
+        const missingUsers = [...new Set(members.map(m => m.user.toString()))]
+          .filter(id => !usersDataMap.has(id));
+        if (missingUsers.length > 0) {
+          const usersData = await users.find(
+            { _id: { $in: missingUsers } }, { email: 1, name: 1, lastName: 1 }
+          ).lean();
+          for (const userData of usersData) {
+            usersDataMap.set(userData._id.toString(), userData);
+          }
+        }
 
         for (const member of members) {
           const memberIdStr = member.user.toString();
 
           if (!uniqueUsers.has(memberIdStr)) {
             uniqueUsers.add(memberIdStr);
-
-            if (!usersDataMap.has(memberIdStr)) {
-              const userData = await users.find({ _id: member.user });
-              usersDataMap.set(memberIdStr, userData[0]);
-            }
 
             const currentUser = {
               _id: member.user,
@@ -732,11 +717,6 @@ class NotificationsService {
             else response.push({ ...currentUser, count: 1 });
           // An account or a group is given
           } else if (!org) {
-            if (!usersDataMap.has(memberIdStr)) {
-              const userData = await users.find({ _id: member.user });
-              usersDataMap.set(memberIdStr, userData[0]);
-            }
-
             const userIndex = response.findIndex(user => user._id.toString() === memberIdStr);
             const existingUser = response[userIndex];
             existingUser.signedToCritical = notificationsData[0].signedToCritical.includes(member.user) !== existingUser.signedToCritical ? null : existingUser.signedToCritical;

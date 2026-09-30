@@ -26,7 +26,6 @@ const OrganizationsController = require('./OrganizationsController');
 const TokensController = require('./TokensController');
 const AppIdentificationsController = require('./AppIdentificationsController');
 const TunnelsController = require('./TunnelsController');
-const UsersController = require('./UsersController');
 const BillingController = require('./BillingController');
 const PathLabelsController = require('./PathLabelsController');
 const MLPoliciesController = require('./MultiLinkPoliciesController');
@@ -48,7 +47,6 @@ module.exports = {
   TokensController,
   AppIdentificationsController,
   TunnelsController,
-  UsersController,
   BillingController,
   PathLabelsController,
   MLPoliciesController,

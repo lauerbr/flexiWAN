@@ -1238,6 +1238,8 @@ const deviceSchema = new Schema({
 );
 
 deviceSchema.index({ org: 1 });
+// Used by the periodic connection status sync
+deviceSchema.index({ isConnected: 1 });
 
 // Default exports
 module.exports =

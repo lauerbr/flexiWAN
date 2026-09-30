@@ -16,14 +16,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('./cors');
 const { verifyPermission } = require('../authenticate');
 const flexibilling = require('../flexibilling');
 const createError = require('http-errors');
 const router = express.Router();
 
-router.use(bodyParser.json());
+router.use(express.json());
 
 // returns a customer self-service portal session URL used for billing
 router.route('/')

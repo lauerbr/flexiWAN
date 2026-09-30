@@ -15,8 +15,26 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const { RateLimiterMemory } = require('rate-limiter-flexible');
+const { RateLimiterMemory, RateLimiterRedis } = require('rate-limiter-flexible');
+const { createClient } = require('redis');
+const configs = require('../configs')();
+const { getRedisAuthUrl } = require('../utils/httpUtils');
 const logger = require('../logging/logging')({ module: module.filename, type: 'req' });
+
+// Redis client shared by all limiters, created on first use
+let redisClient = null;
+const getRedisClient = () => {
+  if (redisClient) return redisClient;
+  const { redisAuth, redisUrlNoAuth } = getRedisAuthUrl(configs.get('redisUrl'));
+  // with offline queue disabled, commands fail immediately when redis is not
+  // connected and the in-memory insurance limiter is used
+  redisClient = createClient({ url: redisUrlNoAuth, enable_offline_queue: false });
+  if (redisAuth) redisClient.auth(redisAuth);
+  redisClient.on('error', (err) => {
+    logger.warn('Limiters redis client error', { params: { err: err.message } });
+  });
+  return redisClient;
+};
 
 class FwLimiter {
   constructor (name, counts, duration, blockDuration) {
@@ -25,11 +43,23 @@ class FwLimiter {
     this.duration = duration;
     this.blockDuration = blockDuration;
 
-    this.limiter = new RateLimiterMemory({
+    const limiterOpts = {
       points: counts,
       duration: duration,
       blockDuration: blockDuration
-    });
+    };
+    if (configs.get('limitersUseRedis', 'boolean')) {
+      // Keep the limiter state in redis so it is shared by all flexiManage instances,
+      // fall back to an in-memory limiter while redis is not available
+      this.limiter = new RateLimiterRedis({
+        ...limiterOpts,
+        storeClient: getRedisClient(),
+        keyPrefix: 'fw-limiter:' + name,
+        insuranceLimiter: new RateLimiterMemory(limiterOpts)
+      });
+    } else {
+      this.limiter = new RateLimiterMemory(limiterOpts);
+    }
   }
 
   async use (key) {
@@ -94,7 +124,8 @@ class FwLimiter {
   async isBlocked (key) {
     const res = await this.limiter.get(key);
 
-    if (res !== null && res.remainingPoints < 0) {
+    // remainingPoints is never negative in the redis store, use consumedPoints
+    if (res !== null && res.consumedPoints > this.maxCount) {
       return true;
     }
 
