@@ -34,7 +34,11 @@ expressWinston.requestWhitelist.push('ip');
 
 // Sensitive data to be excluded from logs
 const headersBlackList = [
-  'authorization'
+  'authorization',
+  'refresh-token',
+  'refresh-jwt',
+  'cookie',
+  'set-cookie'
 ];
 
 // Env specific information

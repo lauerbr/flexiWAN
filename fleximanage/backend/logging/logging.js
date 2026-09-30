@@ -23,6 +23,7 @@ const isPlainObject = require('lodash/isPlainObject');
 const pick = require('lodash/pick');
 const kue = require('kue');
 const { createLogger, format, transports } = require('winston');
+const { redactSecrets } = require('../utils/security');
 const { combine, timestamp, json, colorize, printf } = format;
 const maxLevelLength = 'verbose'.length; // Used for log header alignment
 
@@ -105,7 +106,8 @@ const createLogEntry = (info) => {
   // Event message + data
   logEntry.event = {
     message: info.message,
-    params: info.ctx.params ? info.ctx.params : {}
+    // remove passwords, keys and tokens from the logged data
+    params: info.ctx.params ? redactSecrets(info.ctx.params) : {}
   };
 
   return logEntry;
@@ -125,7 +127,8 @@ const consolLogFormat = combine(
     info.level =
             info.level.toUpperCase() +
             Array(maxLevelLength - info.level.length).join(' ');
-    info.params = info.ctx.params ? `, params: ${JSON.stringify(info.ctx.params)}` : '';
+    info.params = info.ctx.params
+      ? `, params: ${JSON.stringify(redactSecrets(info.ctx.params))}` : '';
     return info;
   })(),
   colorize(),
@@ -238,7 +241,7 @@ const jobLogger = (job) => {
   ]);
   if (job.data.message && job.data.message.tasks) {
     logJob.data.message.tasks = job.data.message.tasks.map(
-      t => JSON.stringify(t).substring(0, 2048)
+      t => JSON.stringify(redactSecrets(t)).substring(0, 2048)
     );
   }
   if (job.data.response) logJob.data.response = deepObjectConvert(job.data.response);

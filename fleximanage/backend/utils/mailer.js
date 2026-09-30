@@ -39,7 +39,8 @@ class Mailer {
       host: host,
       port: port,
       logger: logger,
-      debug: true
+      // Don't log the SMTP traffic, it includes the mail content (e.g. password reset links)
+      debug: false
     };
     if (bypassCertificate) transportOptions.tls = { rejectUnauthorized: false };
     this.smtpTransport = nodemailer.createTransport(transportOptions);
@@ -84,7 +85,10 @@ class Mailer {
       this.smtpTransport.sendMail(mailOptions, (error, response) => {
         let success = true;
         if (error) {
-          logger.error('Send mail error', { params: { mailOptions: mailOptions, error: error } });
+          // Don't log the mail content, it may include tokens
+          logger.error('Send mail error', {
+            params: { to: mailOptions.to, subject: mailOptions.subject, error: error?.message }
+          });
           success = false;
         }
         this.smtpTransport.close();
