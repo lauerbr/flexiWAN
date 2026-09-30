@@ -27,6 +27,7 @@ const pick = require('lodash/pick');
 const keyBy = require('lodash/keyBy');
 const logger = require('../logging/logging')({ module: module.filename, type: 'job' });
 const { devices: devicesModel } = require('../models/devices');
+const { redactSecrets } = require('../utils/security');
 
 class JobsService {
   /**
@@ -57,6 +58,10 @@ class JobsService {
       'priority', // type: integer
       'progress' // type: string
     ]);
+
+    // Don't expose keys, passwords and other secrets included in the job tasks
+    if (retJob.data) retJob.data = redactSecrets(retJob.data);
+    if (retJob.result) retJob.result = redactSecrets(retJob.result);
 
     if (!item?._error) {
       return retJob;
@@ -92,7 +97,7 @@ class JobsService {
     try {
       const parsedError = JSON.parse(item._error);
       if (parsedError && typeof parsedError === 'object' && parsedError.constructor === Object) {
-        retJob.error = parsedError;
+        retJob.error = redactSecrets(parsedError);
       } else {
         retJob.error = buildDefaultErrorMessage(retJob, item._error);
       }

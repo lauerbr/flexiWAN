@@ -16,6 +16,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const Service = require('./Service');
+const { validateSort } = require('../utils/filterUtils');
 const Tunnels = require('../models/tunnels');
 const { getAccessTokenOrgList } = require('../utils/membershipUtils');
 const deviceStatus = require('../periodic/deviceStatus')();
@@ -102,6 +103,7 @@ class TunnelsService {
   static async tunnelsGET (requestParams, { user }, response) {
     const { org, offset, limit, sortField, sortOrder, filters } = requestParams;
     try {
+      validateSort(sortField, sortOrder);
       const orgList = await getAccessTokenOrgList(user, org, false);
       const updateStatusInDb = (filters && filters.includes('tunnelStatus')) ||
         sortField === 'tunnelStatus';

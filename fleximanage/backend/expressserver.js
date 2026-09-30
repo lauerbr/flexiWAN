@@ -38,6 +38,7 @@ const morgan = require('morgan');
 const logger = require('./logging/logging')({ module: module.filename, type: 'req' });
 const { reqLogger, errLogger } = require('./logging/request-logging');
 const serialize = require('serialize-javascript');
+const { mongoSanitizer } = require('./utils/security');
 
 // periodic tasks
 const deviceStatus = require('./periodic/deviceStatus')();
@@ -122,10 +123,15 @@ class ExpressServer {
 
     // Request logging middleware - must be defined before routers.
     this.app.use(reqLogger);
-    this.app.set('trust proxy', true); // Needed to get the public IP if behind a proxy
+    // Needed to get the public IP if behind a proxy. Trust only the configured
+    // number of hops / addresses, otherwise X-Forwarded-For can be spoofed by clients
+    this.app.set('trust proxy', ExpressServer.getTrustProxySetting());
 
     // Don't expose system internals in response headers
     this.app.disable('x-powered-by');
+
+    // Basic security headers
+    this.app.use(ExpressServer.securityHeaders);
 
     // Use morgan request logger in development mode
     if (configs.get('environment') === 'development') this.app.use(morgan('dev'));
@@ -183,6 +189,10 @@ class ExpressServer {
     this.app.use(express.urlencoded({ extended: false }));
     this.app.use(cookieParser());
 
+    // Reject requests containing MongoDB operators (keys starting with '$')
+    // in body, query or params, before any router is called
+    this.app.use(mongoSanitizer);
+
     // Routes allowed without authentication
     this.app.get('/', (req, res) => this.sendIndexFile(req, res));
     this.app.use(express.static(path.join(__dirname, configs.get('clientStaticDir'))));
@@ -210,14 +220,22 @@ class ExpressServer {
     // initialize passport and authentication
     this.app.use(passport.initialize());
 
-    // Enable db admin only in development mode
-    if (configs.get('environment') === 'development') {
-      logger.warn('Warning: Enabling UI database access');
-      // mongo database UI
-      const mongoExpress = require('mongo-express/lib/middleware');
+    // Enable db admin only in development mode, when explicitly enabled and
+    // basic authentication credentials are configured
+    if (configs.get('environment') === 'development' &&
+      configs.get('enableDbAdmin', 'boolean') === true) {
       const mongoExpressConfig = require('./mongo_express_config');
-      const expressApp = await mongoExpress(mongoExpressConfig);
-      this.app.use('/admindb', expressApp);
+      const { username, password } = mongoExpressConfig.basicAuth ?? {};
+      if (!mongoExpressConfig.useBasicAuth || !username || !password || password === 'pass') {
+        logger.error('UI database access is not enabled, set ME_CONFIG_BASICAUTH_USERNAME ' +
+          'and ME_CONFIG_BASICAUTH_PASSWORD to enable it');
+      } else {
+        logger.warn('Warning: Enabling UI database access');
+        // mongo database UI
+        const mongoExpress = require('mongo-express/lib/middleware');
+        const expressApp = await mongoExpress(mongoExpressConfig);
+        this.app.use('/admindb', expressApp);
+      }
     }
 
     // Enable routes for non-authorized links
@@ -280,14 +298,11 @@ class ExpressServer {
         : origIndex;
       const m = modifiedIndex.match(/const __FLEXIWAN_SERVER_CONFIG__=(.*?);/);
       if (m instanceof Array && m.length > 0) { // successful match
-        // eslint-disable-next-line no-eval
-        const newConfig = eval('(' + m[1] + ')');
-        // Update default config with backend variables
-        for (const c in clientConfig) {
-          newConfig[c] = clientConfig[c];
-        }
+        // Update default config with backend variables.
+        // The default config is merged in the browser, to avoid evaluating it on the server
         modifiedIndex = modifiedIndex.replace(m[0],
-          'const __FLEXIWAN_SERVER_CONFIG__=' + serialize(newConfig, { isJSON: true }) + ';');
+          'const __FLEXIWAN_SERVER_CONFIG__=Object.assign(' + m[1] + ',' +
+          serialize(clientConfig, { isJSON: true }) + ');');
       }
       return modifiedIndex;
     };
@@ -324,8 +339,12 @@ class ExpressServer {
      ** */
     // eslint-disable-next-line no-unused-vars
     this.app.use((error, req, res, next) => {
-      const errorResponse = error.error || error.message || error.errors || 'Unknown error';
-      res.status(error.status || 500);
+      const status = error.status || error.statusCode || 500;
+      // Don't expose internal error details for unexpected server errors
+      const errorResponse = (status >= 500 && !error.expose && !error.status)
+        ? 'Internal server error'
+        : error.error || error.message || error.errors || 'Unknown error';
+      res.status(status);
       res.type('json');
       res.json({ error: errorResponse });
     });
@@ -376,16 +395,15 @@ class ExpressServer {
     try {
       this.server = http.createServer(this.app);
 
-      this.options = {
-        key: fs.readFileSync(path.join(__dirname, 'bin', configs.get('httpsCertKey'))),
-        cert: fs.readFileSync(path.join(__dirname, 'bin', configs.get('httpsCert')))
-      };
+      this.options = ExpressServer.getHttpsOptions();
       this.secureServer = https.createServer(this.options, this.app);
 
       // setup wss here
       this.wss = new WebSocket.Server({
         server: configs.get('shouldRedirectHttps', 'boolean') ? this.secureServer : this.server,
-        verifyClient: connections.verifyDevice
+        verifyClient: connections.verifyDevice,
+        // Limit the size of messages received from devices
+        maxPayload: configs.get('deviceWsMaxPayload', 'number')
       });
 
       connections.registerConnectCallback('broker', broker.deviceConnectionOpened);
@@ -407,8 +425,92 @@ class ExpressServer {
       this.secureServer.on('error', this.onError(this.securePort));
       this.secureServer.on('listening', this.onListening(this.secureServer));
     } catch (error) {
-      console.log('Express server lunch error', { params: { message: error.message } });
+      console.error('Express server launch error', { params: { message: error.message } });
+      logger.error('Express server launch error', { params: { message: error.message } });
+      // Can't serve requests, exit so the error is visible and the process can be restarted
+      process.exit(1);
     }
+  }
+
+  /**
+   * Get the express 'trust proxy' setting from the configuration
+   * @return {number|boolean|string} trust proxy setting
+   */
+  static getTrustProxySetting () {
+    const value = configs.get('trustProxy');
+    if (typeof value === 'number' || typeof value === 'boolean') return value;
+    const str = String(value ?? '').trim();
+    if (/^\d+$/.test(str)) return +str;
+    if (str.toLowerCase() === 'true') {
+      logger.warn('trustProxy is set to true, client IP addresses can be spoofed');
+      return true;
+    }
+    if (str === '' || str.toLowerCase() === 'false') return false;
+    // list of trusted addresses / subnets
+    return str;
+  }
+
+  /**
+   * Middleware that adds basic security headers to every response
+   */
+  static securityHeaders (req, res, next) {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    if (req.secure) {
+      res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    }
+    return next();
+  }
+
+  /**
+   * Load the HTTPS key and certificate. In development environment, when the files
+   * don't exist, a temporary self signed certificate is generated.
+   * @return {Object} https options with key and cert
+   */
+  static getHttpsOptions () {
+    const keyFile = path.join(__dirname, 'bin', configs.get('httpsCertKey'));
+    const certFile = path.join(__dirname, 'bin', configs.get('httpsCert'));
+    if (fs.existsSync(keyFile) && fs.existsSync(certFile)) {
+      return { key: fs.readFileSync(keyFile), cert: fs.readFileSync(certFile) };
+    }
+    if (!['development', 'testing'].includes(configs.get('environment'))) {
+      throw new Error(`HTTPS key or certificate file not found (${keyFile}, ${certFile}). ` +
+        'Configure httpsCertKey and httpsCert (HTTPS_CERT_KEY, HTTPS_CERT env variables)');
+    }
+    logger.warn('HTTPS key or certificate not found, generating a temporary self signed ' +
+      'certificate for development', { params: { keyFile, certFile } });
+    console.warn('HTTPS key or certificate not found, using a temporary self signed certificate');
+    return ExpressServer.generateSelfSignedCert();
+  }
+
+  /**
+   * Generate a self signed certificate for development
+   * @return {Object} key and cert in PEM format
+   */
+  static generateSelfSignedCert () {
+    const forge = require('node-forge');
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = '01' + forge.util.bytesToHex(forge.random.getBytesSync(8));
+    cert.validity.notBefore = new Date();
+    cert.validity.notAfter = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    const hosts = configs.get('restServerUrl', 'list').map(u => {
+      try { return new URL(u).hostname; } catch (err) { return null; }
+    }).filter(h => h);
+    const attrs = [{ name: 'commonName', value: hosts[0] || 'localhost' }];
+    cert.setSubject(attrs);
+    cert.setIssuer(attrs);
+    cert.setExtensions([{
+      name: 'subjectAltName',
+      altNames: [...new Set([...hosts, 'localhost'])].map(h => ({ type: 2, value: h }))
+    }]);
+    cert.sign(keys.privateKey, forge.md.sha256.create());
+    return {
+      key: forge.pki.privateKeyToPem(keys.privateKey),
+      cert: forge.pki.certificateToPem(cert)
+    };
   }
 
   async close () {

@@ -43,8 +43,25 @@ const { generateSecret, verifyCode } = require('../otp');
 const SHA256 = require('crypto-js/sha256');
 const rateLimit = require('express-rate-limit');
 const RateLimitStore = require('../rateLimitStore');
+const mongoose = require('mongoose');
+const { isNonEmptyString } = require('../utils/security');
 
 router.use(bodyParser.json());
+
+// Validity period of the e-mail verification link
+const VERIFY_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// Validity period of the password reset link
+const RESET_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Check that an id received from the client is a valid object id string
+ * @param {*} id - id to check
+ * @return {boolean}
+ */
+const isValidObjectIdString = (id) => {
+  return typeof id === 'string' && /^[0-9a-fA-F]{24}$/.test(id) &&
+    mongoose.Types.ObjectId.isValid(id);
+};
 
 // Error formatter
 const formatErr = (err, msg) => {
@@ -88,6 +105,9 @@ router.route('/register')
     if (!configs.get('allowUsersRegistration', 'boolean')) {
       return next(createError(500, 'Users registration is not allowed'));
     }
+
+    // Validate input types, only strings are allowed
+    if (!isNonEmptyString(req.body.email, 255)) return next(createError(500, 'Bad Email'));
 
     // Validate password
     if (!auth.validatePassword(req.body.password)) return next(createError(500, 'Bad Password'));
@@ -147,7 +167,12 @@ router.route('/register')
           phoneNumber: req.body.userPhoneNumber,
           admin: false,
           state: 'unverified',
-          emailTokens: { verify: validateKey, invite: '', resetPassword: '' },
+          emailTokens: {
+            verify: validateKey,
+            verifyExpires: new Date(Date.now() + VERIFY_TOKEN_TTL_MS),
+            invite: '',
+            resetPassword: ''
+          },
           defaultAccount: registerAccount._id,
           defaultOrg: null
         });
@@ -256,12 +281,18 @@ router.route('/register')
 router.route('/reverify-account')
   .options(cors.cors, (req, res) => { res.sendStatus(200); })
   .post(cors.cors, async (req, res, next) => {
+    if (!isNonEmptyString(req.body.email, 255)) {
+      return next(createError(500, 'Account Re-verification process failed'));
+    }
     const validateKey = randomKey(30);
     User.findOneAndUpdate(
       // Query, use the email
       { email: req.body.email },
       // Update
-      { 'emailTokens.verify': validateKey },
+      {
+        'emailTokens.verify': validateKey,
+        'emailTokens.verifyExpires': new Date(Date.now() + VERIFY_TOKEN_TTL_MS)
+      },
       // Options
       { upsert: false, new: false }
     )
@@ -272,7 +303,8 @@ router.route('/reverify-account')
           const p = mailer.sendMailHTML(
             configs.get('mailerEnvelopeFromAddress'),
             configs.get('mailerFromAddress'),
-            req.body.email,
+            // Send only to the address stored for the user
+            resp.email,
             `Re-Verify Your ${configs.get('companyName')} Account`,
             `<h2>Re-Verify Your ${configs.get('companyName')} Account</h2>
                 <b>It has been requested to re-verify your account. If it is asked by yourself,
@@ -305,7 +337,7 @@ router.route('/reverify-account')
 router.route('/verify-account')
   .options(cors.corsWithOptions, (req, res) => { res.sendStatus(200); })
   .post(cors.cors, async (req, res, next) => {
-    if (!req.body.id || !req.body.token || req.body.id === '' || req.body.token === '') {
+    if (!isValidObjectIdString(req.body.id) || !isNonEmptyString(req.body.token, 50)) {
       return next(createError(500, 'Verification Error'));
     }
 
@@ -313,12 +345,19 @@ router.route('/verify-account')
       // Query, use the email and verification token
       {
         _id: req.body.id,
-        'emailTokens.verify': req.body.token
+        'emailTokens.verify': req.body.token,
+        // Tokens created before expiration was introduced have no expiration time
+        $or: [
+          { 'emailTokens.verifyExpires': { $gt: new Date() } },
+          { 'emailTokens.verifyExpires': { $exists: false } },
+          { 'emailTokens.verifyExpires': null }
+        ]
       },
       // Update
       {
         state: 'verified',
-        'emailTokens.verify': ''
+        'emailTokens.verify': '',
+        'emailTokens.verifyExpires': null
       },
       // Options
       { upsert: false, new: false }
@@ -340,14 +379,18 @@ router.route('/verify-account')
  * @param {Function} next = next middleware
  */
 const resetPassword = (req, res, next) => {
-  if (!req.body.email) return next(createError(500, 'Password Reset Error'));
+  // Only a single e-mail address string is allowed
+  if (!isNonEmptyString(req.body.email, 255)) return next(createError(500, 'Password Reset Error'));
 
   const validateKey = randomKey(30);
   User.findOneAndUpdate(
     // Query, use the email and make sure user is verified when reset password
     { email: req.body.email, state: 'verified' },
     // Update
-    { 'emailTokens.resetPassword': validateKey },
+    {
+      'emailTokens.resetPassword': validateKey,
+      'emailTokens.resetPasswordExpires': new Date(Date.now() + RESET_TOKEN_TTL_MS)
+    },
     // Options
     { upsert: false, new: false }
   )
@@ -358,7 +401,8 @@ const resetPassword = (req, res, next) => {
         const p = mailer.sendMailHTML(
           configs.get('mailerEnvelopeFromAddress'),
           configs.get('mailerFromAddress'),
-          req.body.email,
+          // Send only to the address stored for the user
+          resp.email,
           `Reset Password for Your ${configs.get('companyName')} Account`,
           `<h2>Reset Password for your ${configs.get('companyName')} Account</h2>
                 <b>It has been requested to reset your account password. If it is asked by yourself,
@@ -395,8 +439,8 @@ const resetPassword = (req, res, next) => {
  * @param {Function} next = next middleware
  */
 const updatePassword = (req, res, next) => {
-  if (!req.body.id || !req.body.token || !req.body.password ||
-    req.body.id === '' || req.body.token === '') {
+  if (!isValidObjectIdString(req.body.id) || !isNonEmptyString(req.body.token, 50) ||
+    typeof req.body.password !== 'string') {
     return next(createError(500, 'Password Reset Error'));
   }
 
@@ -408,12 +452,23 @@ const updatePassword = (req, res, next) => {
     // Query, use the email and password reset token
     {
       _id: req.body.id,
-      'emailTokens.resetPassword': req.body.token
+      'emailTokens.resetPassword': req.body.token,
+      $or: [
+        { 'emailTokens.resetPasswordExpires': { $gt: new Date() } },
+        // Invitation tokens created before expiration was introduced
+        // have no expiration time, allow them only for users that never logged in
+        { 'emailTokens.resetPasswordExpires': { $exists: false }, state: 'unverified' },
+        { 'emailTokens.resetPasswordExpires': null, state: 'unverified' }
+      ]
     },
-    // Update
+    // Update, revoke all existing refresh tokens of the user
     {
-      state: 'verified',
-      'emailTokens.resetPassword': ''
+      $set: {
+        state: 'verified',
+        'emailTokens.resetPassword': '',
+        'emailTokens.resetPasswordExpires': null
+      },
+      $inc: { tokenVersion: 1 }
     },
     // Options
     { upsert: false, new: true }
@@ -446,7 +501,7 @@ const updatePassword = (req, res, next) => {
 router.route('/reset-password')
   .options(cors.cors, (req, res) => { res.sendStatus(200); })
   .post(cors.cors, async (req, res, next) => {
-    if (!req.body.type) return next(createError(500, 'Password Reset Error'));
+    if (typeof req.body.type !== 'string') return next(createError(500, 'Password Reset Error'));
 
     // Call function based on request type
     if (req.body.type === 'reset') return resetPassword(req, res, next);
@@ -510,7 +565,15 @@ router.route('/auth')
 // Passport exposes a function logout() on the req object which removes the req.user
 router.route('/logout')
   .options(cors.corsWithOptions, (req, res) => { res.sendStatus(200); })
-  .get(cors.corsWithOptions, (req, res) => {
+  .get(cors.corsWithOptions, async (req, res) => {
+    // Revoke the refresh tokens of the user if a valid refresh token was provided
+    try {
+      await auth.revokeRefreshTokens(req.headers['refresh-token']);
+    } catch (err) {
+      logger.warn('Failed to revoke refresh tokens on logout', {
+        params: { err: err.message }, req: req
+      });
+    }
     req.logout();
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
@@ -574,7 +637,7 @@ router.route('/mfa/verify')
     cors.corsWithOptions,
     auth.verifyUserOrLoginJWT,
     async (req, res, next) => {
-      if (!req.body.token) {
+      if (!isNonEmptyString(req.body.token, 20)) {
         return next(createError(401, 'Token is required'));
       }
 
@@ -653,7 +716,7 @@ router.route('/mfa/generateRecoveryCodes')
     const hashed = []; // store hashed in DB
 
     if (req?.user?.mfa?.recoveryCodes?.length > 0 && req.query.regenerate !== 'true') {
-      res.json({ codes });
+      return res.json({ codes });
     }
 
     for (let i = 0; i < 10; i++) {
@@ -671,52 +734,63 @@ router.route('/mfa/generateRecoveryCodes')
     res.json({ codes });
   });
 
+// Recovery codes verification rate limit, allow 5 attempts in 30 seconds
+const recoveryCodeRateLimit = rateLimit({
+  store: new RateLimitStore(1000 * 30), // 30 seconds
+  max: 5,
+  message: { error: 'Too many attempts. Please wait and try again later' },
+  onLimitReached: (req, res, options) => {
+    logger.warn(
+      'MFA recovery code rate limit exceeded. blocking request', {
+        params: { ip: req.ip },
+        req: req
+      });
+  }
+});
+
 router.route('/mfa/verifyRecoveryCode')
   .options(cors.corsWithOptions, (req, res) => { res.sendStatus(200); })
-  .post(cors.corsWithOptions, auth.verifyUserOrLoginJWT, async (req, res, next) => {
-    const userRecoveryCodes = req.user?.mfa?.recoveryCodes ?? [];
-    if (userRecoveryCodes.length === 0) {
-      return next(createError(401, 'Recovery codes are not generated for the user'));
-    }
+  .post(
+    recoveryCodeRateLimit,
+    cors.corsWithOptions,
+    auth.verifyUserOrLoginJWT,
+    async (req, res, next) => {
+      const userRecoveryCodes = req.user?.mfa?.recoveryCodes ?? [];
+      if (userRecoveryCodes.length === 0) {
+        return next(createError(401, 'Recovery codes are not generated for the user'));
+      }
 
-    const requestedCode = req.body?.recoveryCode;
-    if (!requestedCode) {
-      return next(createError(403, 'Recovery codes are missing'));
-    }
+      const requestedCode = req.body?.recoveryCode;
+      if (!isNonEmptyString(requestedCode, 100)) {
+        return next(createError(403, 'Recovery codes are missing'));
+      }
 
-    let validated = false;
-
-    const hashedRequestedCode = SHA256(requestedCode).toString();
-    for (const userRecoveryCode of userRecoveryCodes) {
-      const { code, usedTime } = userRecoveryCode;
+      const hashedRequestedCode = SHA256(requestedCode).toString();
+      const matched = userRecoveryCodes.find(c => c && c.code === hashedRequestedCode);
+      if (!matched) {
+        return next(createError(403, 'Recovery code is invalid'));
+      }
 
       // recovery code can be used once
-      if (usedTime) {
+      if (matched.usedTime) {
         return next(createError(403, 'This recovery code is already used'));
-      };
-
-      if (hashedRequestedCode === code) {
-        // mark recovery code as used
-        await User.findOneAndUpdate(
-          {
-            _id: req.user._id,
-            'mfa.recoveryCodes.code': code
-          },
-          { $set: { 'mfa.recoveryCodes.$.usedTime': new Date() } },
-          { upsert: false }
-        );
-
-        validated = true;
-        break;
       }
-    }
 
-    if (!validated) {
-      return next(createError(403, 'Recovery code is invalid'));
-    }
+      // mark recovery code as used, atomically, only if it was not used in the meantime
+      const updated = await User.findOneAndUpdate(
+        {
+          _id: req.user._id,
+          'mfa.recoveryCodes': { $elemMatch: { code: hashedRequestedCode, usedTime: null } }
+        },
+        { $set: { 'mfa.recoveryCodes.$.usedTime': new Date() } },
+        { upsert: false }
+      );
+      if (!updated) {
+        return next(createError(403, 'This recovery code is already used'));
+      }
 
-    return await sendJwtToken(req, res, validated);
-  });
+      return await sendJwtToken(req, res, true);
+    });
 
 // Default exports
 module.exports = router;

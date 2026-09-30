@@ -58,7 +58,7 @@ const deviceQueues = require('../utils/deviceQueue')(
 );
 const cidr = require('cidr-tools');
 const { TypedError, ErrorTypes } = require('../utils/errors');
-const { getMatchFilters } = require('../utils/filterUtils');
+const { getMatchFilters, validateSort } = require('../utils/filterUtils');
 const TunnelsService = require('./TunnelsService');
 const { pendingTypes, getReason } = require('../deviceLogic/events/eventReasons');
 const {
@@ -358,6 +358,7 @@ class DevicesService {
   static async devicesGET (requestParams, { user }, response) {
     const { org, offset, limit, sortField, sortOrder, filters } = requestParams;
     try {
+      validateSort(sortField, sortOrder);
       const orgList = await getAccessTokenOrgList(user, org, false);
       const updateStatusInDb = (filters && /state|isConnected|sync/.test(filters)) ||
         /state|isConnected|sync/.test(sortField);
@@ -1581,6 +1582,40 @@ class DevicesService {
    * deviceRequest DeviceRequest  (optional)
    * returns Device
    **/
+  /**
+   * Device APIs that can be sent with devicesIdSendPOST by non admin users
+   */
+  static get sendReadOnlyApis () {
+    return [
+      'get-device-info',
+      'get-device-stats',
+      'get-device-logs',
+      'get-device-packet-traces',
+      'get-device-os-routes'
+    ];
+  }
+
+  /**
+   * Get the device fields that are allowed to be updated by devicesIdPUT
+   * @param {Object} deviceRequest - device update request
+   * @return {Object} fields to set
+   */
+  static getDeviceUpdateFields (deviceRequest) {
+    const forbidden = new Set([
+      '_id', '__v', 'id', 'createdAt', 'updatedAt', 'machineId', 'org', 'hostname', 'ipList',
+      'fromToken', 'deviceToken', 'state', 'emailTokens', 'defaultAccount', 'defaultOrg',
+      'sync', 'versions', 'distro'
+    ]);
+    const allowed = new Set(Object.keys(devices.schema.paths).map(p => p.split('.')[0]));
+    const update = {};
+    for (const [key, value] of Object.entries(deviceRequest)) {
+      if (allowed.has(key) && !forbidden.has(key) && !key.startsWith('$') && !key.includes('.')) {
+        update[key] = value;
+      }
+    }
+    return update;
+  }
+
   static async devicesIdPUT (request, { user, server }, response) {
     const { id, org, allowOverlapping, ...deviceRequest } = request;
 
@@ -2285,9 +2320,13 @@ class DevicesService {
         delete deviceRequest.defaultOrg;
         delete deviceRequest.sync;
 
+        // Build the update only from known top level device fields,
+        // so the request can't inject update operators or dotted paths
+        const deviceUpdate = DevicesService.getDeviceUpdateFields(deviceRequest);
+
         updDevice = await devices.findOneAndUpdate(
           { _id: id, org: { $in: orgList } },
-          { ...deviceRequest },
+          { $set: deviceUpdate },
           { new: true, upsert: false, runValidators: true }
         )
           .session(session)
@@ -3764,8 +3803,18 @@ class DevicesService {
    **/
   static async devicesIdSendPOST ({ id, org, ...deviceSendRequest }, { user }, response) {
     try {
-      if (!deviceSendRequest.api || !deviceSendRequest.entity) {
+      if (!deviceSendRequest.api || !deviceSendRequest.entity ||
+        typeof deviceSendRequest.api !== 'string' || typeof deviceSendRequest.entity !== 'string') {
         throw new Error('Request must include entity and api fields');
+      }
+      // Only read only APIs are allowed for users with devices permissions.
+      // Any other API (e.g. exec_timeout, get_file, cli-command, configuration changes)
+      // gives full control over the device, and is allowed only for system admins.
+      if (!DevicesService.sendReadOnlyApis.includes(deviceSendRequest.api) && !user.admin) {
+        logger.warn('Device send request rejected, not allowed API', {
+          params: { deviceId: id, entity: deviceSendRequest.entity, api: deviceSendRequest.api }
+        });
+        return Service.rejectResponse('You don\'t have permission to perform this operation', 403);
       }
       const orgList = await getAccessTokenOrgList(user, org, false);
       const deviceObject = await devices.findOne({
@@ -3793,6 +3842,11 @@ class DevicesService {
         request.params = deviceSendRequest.params;
       }
 
+      logger.info('Device send request', {
+        params: {
+          deviceId: id, entity: request.entity, api: request.message, user: user.username
+        }
+      });
       const result = await connections.deviceSendMessage(
         null,
         deviceObject.machineId,

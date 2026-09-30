@@ -16,6 +16,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 /* eslint-disable no-unused-vars */
 const Service = require('./Service');
+const { escapeRegExp } = require('../utils/security');
 const createError = require('http-errors');
 const isEqual = require('lodash/isEqual');
 const { getAccessTokenOrgList } = require('../utils/membershipUtils');
@@ -93,7 +94,11 @@ class MultiLinkPoliciesService {
 
     // Duplicate names are not allowed in the same organization
     const hasDuplicateName = await MultiLinkPolicies.findOne(
-      { org, name: { $regex: new RegExp(`^${name}$`, 'i') }, _id: { $ne: ObjectId(_id) } }
+      {
+        org,
+        name: { $regex: new RegExp(`^${escapeRegExp(name)}$`, 'i') },
+        _id: { $ne: ObjectId(_id) }
+      }
     );
     if (hasDuplicateName) {
       return {

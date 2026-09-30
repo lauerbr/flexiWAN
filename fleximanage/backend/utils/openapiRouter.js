@@ -89,8 +89,11 @@ function openApiRouter (openapiSchemas) {
         await apiController[controllerOperation](request, response, next);
       }
     } catch (error) {
-      console.error(error);
-      const err = { code: 500, error: error.message };
+      logger.error('Error handling request', {
+        params: { message: error.message, stack: error.stack }
+      });
+      // Don't expose internal error details to the client
+      const err = { code: 500, error: 'Internal server error' };
       handleError(err, request, response, next);
     }
   };

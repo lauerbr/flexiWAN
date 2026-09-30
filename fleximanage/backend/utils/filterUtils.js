@@ -15,6 +15,52 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const { escapeRegExp } = require('./security');
+
+// Maximum length of a filter value
+const MAX_FILTER_VALUE_LENGTH = 256;
+// Supported filter operations
+const FILTER_OPERATIONS = [
+  '==', '!=', 'contains', '!contains', '<', '>', '<=', '>=', 'in', 'in last days'
+];
+
+// Fields that must not be used for filtering or sorting, to prevent leaking their values
+const SENSITIVE_FIELD =
+  /^(devicetoken|token|hash|salt|emailtokens|mfa|key|psk)$|secret|password|privatekey/i;
+
+/**
+ * Check that a field path (filter key or sort field) is safe to use in a query:
+ * only letters, digits, '_', '-', '.', and not a sensitive field
+ * @param {string} field - field path, e.g. 'interfaces.name'
+ * @return {boolean}
+ */
+const isValidFieldPath = (field) => {
+  if (typeof field !== 'string' || field.length === 0 || field.length > 100) return false;
+  if (!/^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(field)) return false;
+  return !field.split('.').some(part => SENSITIVE_FIELD.test(part));
+};
+
+/**
+ * Check that a filter is well formed, throws an error if not
+ * @param {Object} filter a filter object from API request
+ */
+const validateFilter = ({ key, op, val }) => {
+  const err = new Error('There is an error in filter');
+  err.status = 400;
+  if (typeof key !== 'string' ||
+    !key.split('|').every(k => isValidFieldPath(k.replace(/\?/g, 'A')))) {
+    throw err;
+  }
+  if (!FILTER_OPERATIONS.includes(op)) throw err;
+  const isValidValue = v => v === null || ['undefined', 'number', 'boolean'].includes(typeof v) ||
+    (typeof v === 'string' && v.length <= MAX_FILTER_VALUE_LENGTH);
+  if (Array.isArray(val)) {
+    if (op !== 'in' || val.length > 1000 || !val.every(isValidValue)) throw err;
+  } else if (!isValidValue(val)) {
+    throw err;
+  }
+};
+
 /**
  * Converts API query filter operation to mongoose expression
  * @param {Object} filter a filter object from API request
@@ -78,15 +124,17 @@ const getFilterExpression = ({ key, op, val }) => {
   }
   // all other types
   const isString = typeof val === 'string';
+  // user input is matched literally
+  const escVal = escapeRegExp(val);
   switch (op) {
     case '==':
-      return { [key]: isString ? new RegExp('^' + val + '$', 'i') : val };
+      return { [key]: isString ? new RegExp('^' + escVal + '$', 'i') : val };
     case '!=':
-      return { [key]: isString ? { $not: new RegExp('^' + val, 'i') } : { $ne: val } };
+      return { [key]: isString ? { $not: new RegExp('^' + escVal, 'i') } : { $ne: val } };
     case 'contains':
-      return { [key]: new RegExp(val, 'i') };
+      return { [key]: new RegExp(escVal, 'i') };
     case '!contains':
-      return { [key]: new RegExp('^((?!' + val + ').)*$', 'i') };
+      return { [key]: new RegExp('^((?!' + escVal + ').)*$', 'i') };
     case '<':
       return { [key]: { $lt: val } };
     case '>':
@@ -115,6 +163,11 @@ const passFilters = (obj, filters) => {
   // the object must pass every filter
   return filters.every(({ key, op, val }) => {
     if (!key || !op) return false;
+    try {
+      validateFilter({ key, op, val });
+    } catch (err) {
+      return false;
+    }
     const props = key.split('.');
     let objVal = obj;
     // the key can be complex, like 'data.message.title'
@@ -130,11 +183,13 @@ const passFilters = (obj, filters) => {
         val = val === true || val === 'true'; break;
     }
     const isString = typeof val === 'string';
+    // user input is matched literally
+    const escVal = escapeRegExp(val);
     switch (op) {
       case '==':
-        return isString ? (new RegExp('^' + val + '$', 'i')).test(objVal) : val === objVal;
+        return isString ? (new RegExp('^' + escVal + '$', 'i')).test(objVal) : val === objVal;
       case '!=':
-        return isString ? !(new RegExp('^' + val + '$', 'i')).test(objVal) : val !== objVal;
+        return isString ? !(new RegExp('^' + escVal + '$', 'i')).test(objVal) : val !== objVal;
       case '<=':
         return objVal <= val;
       case '>=':
@@ -144,9 +199,9 @@ const passFilters = (obj, filters) => {
       case '>':
         return objVal > val;
       case 'contains':
-        return (new RegExp(val, 'i')).test(objVal);
+        return (new RegExp(escVal, 'i')).test(objVal);
       case '!contains':
-        return (new RegExp('^((?!' + val + ').)*$', 'i')).test(objVal);
+        return (new RegExp('^((?!' + escVal + ').)*$', 'i')).test(objVal);
       case 'in':
         if (!Array.isArray(val)) val = val.split(',');
         return val.includes(objVal);
@@ -163,7 +218,12 @@ const passFilters = (obj, filters) => {
  */
 const getMatchFilters = (filters) => {
   const matchFilters = [];
+  if (!Array.isArray(filters)) throw new Error('There is an error in filters');
   for (const filter of filters) {
+    if (!filter || typeof filter !== 'object') {
+      throw new Error('There is an error in filter: ' + JSON.stringify(filter));
+    }
+    validateFilter(filter);
     const filterExpr = getFilterExpression(filter);
     if (filterExpr !== undefined) {
       matchFilters.push(filterExpr);
@@ -174,7 +234,25 @@ const getMatchFilters = (filters) => {
   return matchFilters;
 };
 
+/**
+ * Validate sort parameters, throws an error if not valid
+ * @param {string} sortField - field to sort by
+ * @param {string} sortOrder - asc or desc
+ */
+const validateSort = (sortField, sortOrder) => {
+  if (sortField === undefined || sortField === null || sortField === '') return;
+  const err = new Error('Invalid sort parameters');
+  err.status = 400;
+  if (!isValidFieldPath(sortField)) throw err;
+  if (sortOrder !== undefined && sortOrder !== null &&
+    !(typeof sortOrder === 'string' && ['asc', 'desc'].includes(sortOrder.toLowerCase()))) {
+    throw err;
+  }
+};
+
 module.exports = {
   getMatchFilters,
-  passFilters
+  passFilters,
+  validateSort,
+  isValidFieldPath
 };

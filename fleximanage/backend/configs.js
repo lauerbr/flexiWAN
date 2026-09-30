@@ -24,6 +24,13 @@
 /* eslint-disable max-len */
 const os = require('os');
 const hostname = os.hostname();
+
+// Default secrets, must be replaced in any non development environment
+const DEFAULT_TOKEN_SECRET = 'abcdefg1234567';
+const DEFAULT_WEBHOOK_SECRET = 'ABC';
+const MIN_TOKEN_SECRET_LENGTH = 32;
+// Environments where insecure default secrets are allowed (with a warning)
+const INSECURE_DEFAULTS_ENVS = ['development', 'testing'];
 const configEnv = {
   // This is the default configuration, override by the following sections
   default: {
@@ -32,7 +39,9 @@ const configEnv = {
     // URL of the UI server
     uiServerUrl: ['https://local.flexiwan.com:3000'],
     // Key used for users tokens, override default with environment variable USER_SECRET_KEY
-    userTokenSecretKey: 'abcdefg1234567',
+    // In non development environments the server refuses to start with the default or
+    // a secret shorter than 32 characters
+    userTokenSecretKey: DEFAULT_TOKEN_SECRET,
     // Whether to validate open API response. True for testing and dev, False for production,
     // to remove unneeded fields from the response, use validateOpenAPIResponse = { removeAdditional: 'failing' }
     validateOpenAPIResponse: true,
@@ -60,7 +69,9 @@ const configEnv = {
     // The time to retain jobs until deleted from the database, in msec
     jobRetainTimeout: 604800000,
     // Key used for device tokens, override default with environment variable DEVICE_SECRET_KEY
-    deviceTokenSecretKey: 'abcdefg1234567',
+    // In non development environments the server refuses to start with the default or
+    // a secret shorter than 32 characters
+    deviceTokenSecretKey: DEFAULT_TOKEN_SECRET,
     // Key used to validate google captcha token, generated at https://www.google.com/u/1/recaptcha/admin/create
     // Default value is not set, which only validate the client side captcha
     captchaKey: '',
@@ -120,6 +131,17 @@ const configEnv = {
     redirectHttpsPort: 3443,
     // Should we redirect to https, should be set to false if running behind a secure proxy such as CloudFlare
     shouldRedirectHttps: true,
+    // Express 'trust proxy' setting, used to get the client IP from X-Forwarded-For for rate limiting.
+    // Number of trusted proxy hops (default 1), or a comma separated list of trusted proxy
+    // IPs/subnets (e.g. 'loopback, 10.0.0.0/8'). Use 0 or false when not running behind a proxy.
+    // Override with environment variable TRUST_PROXY
+    trustProxy: 1,
+    // Enable mongo-express DB admin UI at /admindb. Only allowed in development environment,
+    // requires ME_CONFIG_BASICAUTH_USERNAME and ME_CONFIG_BASICAUTH_PASSWORD to be set.
+    // Override with environment variable ENABLE_DB_ADMIN
+    enableDbAdmin: false,
+    // Maximum size in bytes of a websocket message received from a device
+    deviceWsMaxPayload: 50 * 1024 * 1024,
     // Certificate key location, under bin directory
     // On production if the key located in the Let's encrypt directory, it's possible to link to it using:
     // sudo ln -s /etc/letsencrypt/live/app.flexiwan.com/privkey.pem ~/FlexiWanSite/bin/cert.app.flexiwan.com/domain.key
@@ -164,11 +186,11 @@ const configEnv = {
     // Web hooks add user URL, used to send for new uses, '' to bypass hook
     webHookAddUserUrl: '',
     // Web hooks add user secret, send in addition to the message for filtering
-    webHookAddUserSecret: 'ABC',
+    webHookAddUserSecret: DEFAULT_WEBHOOK_SECRET,
     // Web hooks register device URL, used to send for new registered devices, '' to bypass hook
     webHookRegisterDeviceUrl: '',
     // Web hooks register device secret, send in addition to the message for filtering
-    webHookRegisterDeviceSecret: 'ABC',
+    webHookRegisterDeviceSecret: DEFAULT_WEBHOOK_SECRET,
     // Global app identification rules file location
     appRulesUrl: 'https://sandbox.flexiwan.com/Protocols/app-rules.json',
     // Global applications file locations
@@ -443,7 +465,67 @@ class Configs {
 
     this.config_values.nodeVersion = process.version;
 
-    console.log('Configuration used:\n' + JSON.stringify(this.config_values, null, 2));
+    console.log('Configuration used:\n' +
+      JSON.stringify(Configs.redactConfig(this.config_values), null, 2));
+
+    Configs.validateSecrets(this.config_values);
+  }
+
+  /**
+   * Return a copy of the configuration without secrets, for logging
+   * @param {Object} config - configuration
+   * @return {Object} redacted configuration
+   */
+  static redactConfig (config) {
+    const redacted = {};
+    for (const [key, value] of Object.entries(config)) {
+      if (/secret|password|token$|apikey|captchakey/i.test(key) && value) {
+        redacted[key] = '***';
+      } else if (typeof value === 'string') {
+        // remove credentials from URLs, e.g. mongodb://user:pass@host
+        redacted[key] = value.replace(/(\/\/)[^/@\s]*@/g, '$1***@');
+      } else {
+        redacted[key] = value;
+      }
+    }
+    return redacted;
+  }
+
+  /**
+   * Refuse to run with default or weak secrets outside development environments
+   * @param {Object} config - configuration
+   */
+  static validateSecrets (config) {
+    const problems = [];
+    for (const key of ['userTokenSecretKey', 'deviceTokenSecretKey']) {
+      const value = config[key];
+      if (typeof value !== 'string' || value === DEFAULT_TOKEN_SECRET) {
+        problems.push(`${key} is set to the default value`);
+      } else if (value.length < MIN_TOKEN_SECRET_LENGTH) {
+        problems.push(`${key} is shorter than ${MIN_TOKEN_SECRET_LENGTH} characters`);
+      }
+    }
+    for (const [urlKey, secretKey] of [
+      ['webHookAddUserUrl', 'webHookAddUserSecret'],
+      ['webHookRegisterDeviceUrl', 'webHookRegisterDeviceSecret']
+    ]) {
+      if (config[urlKey] && (!config[secretKey] || config[secretKey] === DEFAULT_WEBHOOK_SECRET)) {
+        problems.push(`${secretKey} is set to the default value while ${urlKey} is used`);
+      }
+    }
+    if (problems.length === 0) return;
+
+    const msg = 'Insecure configuration: ' + problems.join('; ') +
+      '. Set USER_SECRET_KEY, DEVICE_SECRET_KEY (at least ' + MIN_TOKEN_SECRET_LENGTH +
+      ' random characters), WEBHOOK_ADD_USER_KEY and WEBHOOK_REGISTER_DEVICE_KEY.';
+    if (INSECURE_DEFAULTS_ENVS.includes(config.environment)) {
+      console.warn('**************************************************************');
+      console.warn('WARNING: ' + msg);
+      console.warn('This is allowed only in development/testing environments.');
+      console.warn('**************************************************************');
+    } else {
+      throw new Error(msg);
+    }
   }
 
   getEnv () {

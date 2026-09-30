@@ -16,6 +16,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const Service = require('./Service');
+const { escapeRegExp } = require('../utils/security');
 const createError = require('http-errors');
 const { getAccessTokenOrgList } = require('../utils/membershipUtils');
 const QOSPolicies = require('../models/qosPolicies');
@@ -24,6 +25,13 @@ const { devices } = require('../models/devices');
 const { ObjectId } = require('mongoose').Types;
 const { applyPolicy } = require('../deviceLogic/qosPolicy');
 const { getFullTrafficMap, apply: applyTrafficMap } = require('../deviceLogic/qosTrafficMap');
+const { predefinedServiceClasses } = require('../models/appIdentifications');
+
+// Allowed values of the QoS traffic map
+const trafficMapImportances = ['high', 'medium', 'low'];
+const trafficMapQueues = [
+  'realtime', 'control-signaling', 'prime-select', 'standard-select', 'best-effort'
+];
 
 class QOSPoliciesService {
   static async verifyRequestSchema (qosPolicyRequest, org) {
@@ -31,7 +39,7 @@ class QOSPoliciesService {
 
     // Duplicate names are not allowed in the same organization
     const hasDuplicateName = await QOSPolicies.findOne(
-      { org, name: { $regex: new RegExp(`^${name}$`, 'i') }, _id: { $ne: _id } }
+      { org, name: { $regex: new RegExp(`^${escapeRegExp(name)}$`, 'i') }, _id: { $ne: _id } }
     );
     if (hasDuplicateName) {
       return {
@@ -526,16 +534,31 @@ class QOSPoliciesService {
   static async qosTrafficMapPUT ({ org, ...qosTrafficMapRequest }, { user }) {
     try {
       const orgList = await getAccessTokenOrgList(user, org, false);
-      // todo: validate qos traffic map request
+      // Build the traffic map only from known service classes, importances and queues
+      const trafficMap = {};
+      for (const [serviceClass, importances] of Object.entries(qosTrafficMapRequest)) {
+        // unknown fields are ignored
+        if (!predefinedServiceClasses.includes(serviceClass)) continue;
+        if (!importances || typeof importances !== 'object' || Array.isArray(importances)) {
+          throw createError(400, `Invalid service class ${serviceClass}`);
+        }
+        trafficMap[serviceClass] = {};
+        for (const [importance, queue] of Object.entries(importances)) {
+          if (!trafficMapImportances.includes(importance) || !trafficMapQueues.includes(queue)) {
+            throw createError(400, `Invalid traffic map value for ${serviceClass}`);
+          }
+          trafficMap[serviceClass][importance] = queue;
+        }
+      }
       await QOSTrafficMap.findOneAndUpdate(
         { org: { $in: orgList } },
-        { $set: { trafficMap: qosTrafficMapRequest } },
+        { $set: { trafficMap } },
         { upsert: true, new: true }
       );
       const opDevices = await devices.find({ org: { $in: orgList } });
       await applyTrafficMap(opDevices, user, { org: orgList[0] });
-      const { trafficMap } = await getFullTrafficMap(orgList);
-      return Service.successResponse(trafficMap);
+      const { trafficMap: fullTrafficMap } = await getFullTrafficMap(orgList);
+      return Service.successResponse(fullTrafficMap);
     } catch (e) {
       return Service.rejectResponse(
         e.message || 'Internal Server Error',

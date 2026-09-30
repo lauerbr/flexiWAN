@@ -42,6 +42,10 @@ const mongoConns = require('../mongoConns.js')();
 const NotificationsConf = require('../models/notificationsConf');
 const users = require('../models/users');
 const createError = require('http-errors');
+const { escapeHtml } = require('../utils/security');
+
+// Validity period of the invitation (set password) link
+const INVITE_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 class MembersService {
   /**
@@ -289,22 +293,31 @@ class MembersService {
       // Check that input parameters are OK
       const checkParams = MembersService.checkMemberParameters(memberRequest, user);
       if (checkParams.status === false) return Service.rejectResponse(checkParams.error, 400);
+      if (typeof memberRequest.userEntity !== 'string' ||
+        !['account', 'group', 'organization'].includes(memberRequest.userPermissionTo)) {
+        return Service.rejectResponse('Invitation Fields Error', 400);
+      }
 
+      // Only the membership in the path is modified, body _id / userId are ignored
       const targetUserMembership = await membership.findOne({
         _id: id,
         account: user.defaultAccount._id
       });
+      if (!targetUserMembership) {
+        throw createError(404, 'Member not found');
+      }
+      const targetUserId = targetUserMembership.user.toString();
 
       // avoid giving the same user different roles in the same resource level
       const userMembershipInfo = await membership.findOne(
         MembersService.getMembershipQueryParams(
-          memberRequest.userId,
+          targetUserId,
           user,
           memberRequest,
           null,
           false)
       );
-      if (userMembershipInfo && (userMembershipInfo._id.toString()) !== memberRequest._id) {
+      if (userMembershipInfo && (userMembershipInfo._id.toString()) !== id.toString()) {
         const errMsg = `This user already has a role in this ${memberRequest.userPermissionTo},
          please delete or edit the existing role.`;
         throw createError(400, errMsg);
@@ -320,13 +333,39 @@ class MembersService {
         targetUserMembership
       );
 
-      if (!verified) {
+      // make sure user is allowed to modify the current membership scope as well
+      const verifiedCurrent = await MembersService.checkMemberLevel(
+        targetUserMembership.to,
+        targetUserMembership.role,
+        targetUserMembership.to === 'organization'
+          ? targetUserMembership.organization?.toString() : targetUserMembership.group,
+        user._id,
+        user.defaultAccount._id,
+        targetUserMembership
+      );
+
+      if (!verified || !verifiedCurrent) {
         throw createError(403, 'No sufficient permissions for this operation');
+      }
+
+      // Check that the account keeps at least one owner
+      const isOwnerRemoved = targetUserMembership.to === 'account' &&
+        targetUserMembership.role === 'owner' &&
+        (memberRequest.userPermissionTo !== 'account' || memberRequest.userRole !== 'owner');
+      if (isOwnerRemoved) {
+        const numAccountOwners = await membership.countDocuments({
+          account: user.defaultAccount._id,
+          to: 'account',
+          role: 'owner'
+        });
+        if (numAccountOwners < 2) {
+          throw createError(400, 'Account must have at least one owner');
+        }
       }
 
       // Update
       const member = await membership.findOneAndUpdate(
-        { _id: memberRequest._id, account: user.defaultAccount._id },
+        { _id: id, account: user.defaultAccount._id },
         {
           $set: {
             group: memberRequest.userPermissionTo === 'group' ? memberRequest.userEntity : '',
@@ -350,7 +389,7 @@ class MembersService {
 
       // Verify if default organization still accessible by the
       // user after the change, if not switch to another org
-      const _user = await Users.findOne({ _id: memberRequest.userId })
+      const _user = await Users.findOne({ _id: targetUserId })
         .populate('defaultAccount');
       if (!_user) {
         throw (new Error('User not found'));
@@ -363,7 +402,7 @@ class MembersService {
         if (!org) {
           // Get the first org available for this user
           const org0 = orgs[Object.keys(orgs)[0]] || null;
-          await Users.updateOne({ _id: memberRequest.userId }, { defaultOrg: org0._id });
+          await Users.updateOne({ _id: targetUserId }, { defaultOrg: org0?._id ?? null });
         }
       }
 
@@ -595,7 +634,12 @@ class MembersService {
           phoneNumber: '',
           admin: false,
           state: 'unverified',
-          emailTokens: { verify: '', invite: '', resetPassword: resetPWKey },
+          emailTokens: {
+            verify: '',
+            invite: '',
+            resetPassword: resetPWKey,
+            resetPasswordExpires: new Date(Date.now() + INVITE_TOKEN_TTL_MS)
+          },
           defaultAccount: user.defaultAccount._id,
           defaultOrg: memberRequest.userPermissionTo === 'organization'
             ? memberRequest.userEntity : null
@@ -650,12 +694,13 @@ class MembersService {
         configs.get('mailerFromAddress'),
         memberRequest.email,
         `You are invited to a ${configs.get('companyName')} ${memberRequest.userPermissionTo}`,
-        (`<h2>${configs.get('companyName')} ${memberRequest.userPermissionTo} Invitation</h2>
+        (`<h2>${configs.get('companyName')} ${escapeHtml(memberRequest.userPermissionTo)}
+        Invitation</h2>
         <b>You have been invited to a ${configs.get('companyName')}
-        company ${memberRequest.userPermissionTo} named
-        '${memberRequest.userPermissionTo === 'group'
-        ? populatedMember.group : populatedMember[memberRequest.userPermissionTo].name}'
-          by ${user.username} . </b>`) + ((registerUser)
+        company ${escapeHtml(memberRequest.userPermissionTo)} named
+        '${escapeHtml(memberRequest.userPermissionTo === 'group'
+        ? populatedMember.group : populatedMember[memberRequest.userPermissionTo].name)}'
+          by ${escapeHtml(user.username)} . </b>`) + ((registerUser)
           ? `<b>Click below to set your password</b>
         <p><a href="${restUiUrl}/reset-password?id=${
           registerUser._id
@@ -727,6 +772,9 @@ class MembersService {
   static async membersIdResetMfaGET ({ id }, { user }, response) {
     // user can reset MFA for himself only.
     // Account owner can reset 2fa for all users in his account.
+    if (typeof id !== 'string' || !mongoose.Types.ObjectId.isValid(id)) {
+      return Service.rejectResponse('Invalid user id', 400);
+    }
     let allowedToReset = user._id.toString() === id; // user for himself.
     if (!allowedToReset) {
       // if user tried to reset someone else - make sure he is account owner.
@@ -736,7 +784,22 @@ class MembersService {
         to: 'account',
         role: 'owner'
       });
-      allowedToReset = isAccountOwner !== null;
+      // MFA settings are global to the user, so the asking user must be an
+      // owner of every account the target user is a member of. The target user
+      // must also be a member of the asking user's account.
+      if (isAccountOwner !== null) {
+        const targetAccounts = (await membership.distinct('account', { user: id }))
+          .map(a => a.toString());
+        if (targetAccounts.includes(user.defaultAccount._id.toString())) {
+          const ownedAccounts = (await membership.distinct('account', {
+            user: user._id,
+            account: { $in: targetAccounts },
+            to: 'account',
+            role: 'owner'
+          })).map(a => a.toString());
+          allowedToReset = targetAccounts.every(a => ownedAccounts.includes(a));
+        }
+      }
     }
     if (!allowedToReset) {
       return Service.rejectResponse(

@@ -18,6 +18,7 @@
 const Logger = require('../logging/logging')({ module: module.filename, type: 'req' });
 const configs = require('../configs')();
 const { getUiServerUrl } = require('../utils/httpUtils');
+const { redactSecrets } = require('../utils/security');
 
 class Controller {
   static sendResponse (response, payload) {
@@ -36,12 +37,38 @@ class Controller {
   }
 
   static sendError (response, error) {
-    response.status(error.code || 500);
+    const code = Number.isInteger(error.code) ? error.code : 500;
+    response.status(code);
     if (error.error instanceof Object) {
       response.json(error.error);
+    } else if (error.error) {
+      response.end(error.error);
     } else {
-      response.end(error.error || error.message);
+      // Unexpected exception, don't expose internal details to the client
+      Logger.error('Unexpected error performing operation', {
+        params: { message: error.message, stack: error.stack }
+      });
+      response.end(code >= 500 ? 'Internal server error' : error.message);
     }
+  }
+
+  /**
+   * Get the REST server URL of the request, only configured servers are allowed.
+   * The Host header is controlled by the client, so it is not used directly.
+   * @param {Object} request - express request
+   * @return {string} rest server url
+   */
+  static getRequestServer (request) {
+    const servers = configs.get('restServerUrl', 'list');
+    const host = request.get('host');
+    const found = servers.find(s => {
+      try {
+        return new URL(s).host === host;
+      } catch (err) {
+        return false;
+      }
+    });
+    return found || servers[0];
   }
 
   static collectFiles (request) {
@@ -102,8 +129,8 @@ class Controller {
     try {
       const requestParams = this.collectRequestParams(request);
 
-      // extract the "host" header into the top-level of the object to allow destructs it easily
-      request.server = `${request.protocol}://${request.get('host')}`;
+      // set the server url into the top-level of the object to allow destructs it easily
+      request.server = Controller.getRequestServer(request);
 
       // extract the client hostname from Referer header and check if exists in configs.
       // If yes, use it. If not - use the first one in configs.
@@ -119,7 +146,7 @@ class Controller {
           params: {
             url: request.url,
             method: request.method,
-            body: request.body,
+            body: redactSecrets(request.body),
             error: serviceResponse
           }
         });

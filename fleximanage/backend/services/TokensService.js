@@ -16,6 +16,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const Service = require('./Service');
+const { escapeRegExp } = require('../utils/security');
 
 const jwt = require('jsonwebtoken');
 const configs = require('../configs.js')();
@@ -119,15 +120,19 @@ class TokensService {
       const orgList = await getAccessTokenOrgList(user, org, true);
       const servers = configs.get('restServerUrl', 'list');
       // Verify request schema
+      if (typeof tokenRequest.name !== 'string') {
+        return Service.rejectResponse('Token name is required', 400);
+      }
       const { valid, message } = await TokensService.verifyRequestSchema(
-        tokenRequest, orgList[0], servers
+        { ...tokenRequest, _id: id }, orgList[0], servers
       );
       if (!valid) {
         throw new Error(message);
       }
+      // Only the name of the token can be modified
       const result = await Tokens.findOneAndUpdate(
         { _id: id, org: { $in: orgList } },
-        { $set: tokenRequest },
+        { $set: { name: tokenRequest.name } },
         { useFindAndModify: false, upsert: false, runValidators: true, new: true });
 
       if (!result) {
@@ -225,7 +230,7 @@ class TokensService {
 
     // Duplicate names are not allowed in the same organization
     const hasDuplicateName = await Tokens.findOne(
-      { org, name: { $regex: new RegExp(`^${name}$`, 'i') }, _id: { $ne: _id } }
+      { org, name: { $regex: new RegExp(`^${escapeRegExp(name)}$`, 'i') }, _id: { $ne: _id } }
     );
     if (hasDuplicateName) {
       return {

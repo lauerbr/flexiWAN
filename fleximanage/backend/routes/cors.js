@@ -21,6 +21,16 @@ const cors = require('cors');
 // Whitelist of origins allowed to access resources
 const whitelist = configs.get('corsWhiteList', 'list');
 
+/**
+ * Check if an origin is in the CORS whitelist
+ * @param {string} origin - request origin header
+ * @return {boolean}
+ */
+const isWhitelistedOrigin = (origin) => {
+  return typeof origin === 'string' && whitelist.indexOf(origin) !== -1;
+};
+exports.isWhitelistedOrigin = isWhitelistedOrigin;
+
 // CORS handler
 var corsOptionsCheck = (req, callback) => {
   var corsOptions = { exposedHeaders: ['Refresh-JWT', 'refresh-token', 'records-total'] };

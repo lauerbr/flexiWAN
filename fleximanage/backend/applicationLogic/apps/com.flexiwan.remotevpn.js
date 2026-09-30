@@ -15,6 +15,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const { escapeRegExp } = require('../../utils/security');
 const Joi = require('joi');
 const pick = require('lodash/pick');
 const omit = require('lodash/omit');
@@ -52,6 +53,10 @@ class RemoteVpn extends IApplication {
   };
 
   async validateConfiguration (configurationRequest, application, account) {
+    // The G-Suite private keys are masked when returned to the client,
+    // restore the stored keys if the client sent back the masked value
+    restoreMaskedPrivateKeys(configurationRequest, application?.configuration);
+
     // validate user inputs
     const result = vpnConfigSchema.validate(configurationRequest);
     if (result.error) {
@@ -60,7 +65,7 @@ class RemoteVpn extends IApplication {
 
     // check if unique networkId already taken
     const networkId = configurationRequest.networkId;
-    const regex = new RegExp(`\\b${networkId}\\b`, 'i');
+    const regex = new RegExp(`\\b${escapeRegExp(networkId)}\\b`, 'i');
     const existsNetworkId = await applications.findOne(
       {
         _id: { $ne: application._id },
@@ -511,6 +516,18 @@ class RemoteVpn extends IApplication {
     const keysExist = configuration.keys && 1; // "&& 1" to return a boolean, not the keys object.
     const res = omit(configuration, secretFields);
     res.keysExist = keysExist;
+    // Don't return the G-Suite service account private keys to the client
+    const gsuiteDomains = res?.authentications?.gsuite?.domains;
+    if (Array.isArray(gsuiteDomains)) {
+      res.authentications = {
+        ...res.authentications,
+        gsuite: {
+          ...res.authentications.gsuite,
+          domains: gsuiteDomains.map(d => d && d.privateKey
+            ? { ...d, privateKey: MASKED_PRIVATE_KEY } : d)
+        }
+      };
+    }
     return res;
   };
 
@@ -553,8 +570,28 @@ const allowedFields = [
 
 const secretFields = [
   'keys'
-  // TODO: what about private key of gsuite service account?
 ];
+
+// Value returned to the client instead of the G-Suite service account private key
+const MASKED_PRIVATE_KEY = '********';
+
+/**
+ * Replace masked G-Suite private keys in the configuration request with the stored keys
+ * @param {Object} configurationRequest - configuration request (modified in place)
+ * @param {Object} storedConfiguration - current application configuration
+ */
+const restoreMaskedPrivateKeys = (configurationRequest, storedConfiguration) => {
+  const reqDomains = configurationRequest?.authentications?.gsuite?.domains;
+  if (!Array.isArray(reqDomains)) return;
+  const storedDomains = storedConfiguration?.authentications?.gsuite?.domains ?? [];
+  for (const reqDomain of reqDomains) {
+    if (reqDomain && reqDomain.privateKey === MASKED_PRIVATE_KEY) {
+      const stored = storedDomains.find(d => d && d.domain === reqDomain.domain);
+      // if not found the masked value fails as a key and the user must provide it again
+      reqDomain.privateKey = stored?.privateKey || '';
+    }
+  }
+};
 const vpnConfigSchema = Joi.object().keys({
   networkId: Joi.string().pattern(/^[A-Za-z0-9]+$/).min(3).max(20)
     .invalid(

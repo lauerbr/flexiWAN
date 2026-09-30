@@ -536,7 +536,8 @@ class ApplicationsService {
         return Service.rejectResponse('Invalid request', 500);
       }
 
-      const app = await applications.findOne({ _id: id }).populate('appStoreApp').lean();
+      const app = await applications.findOne({ _id: id, org: { $in: orgList } })
+        .populate('appStoreApp').lean();
 
       if (!app) {
         return Service.rejectResponse('Invalid application id', 500);
@@ -588,7 +589,7 @@ class ApplicationsService {
         return Service.rejectResponse('Invalid request', 500);
       }
 
-      const app = await applications.findOne({ _id: id })
+      const app = await applications.findOne({ _id: id, org: { $in: orgList } })
         .populate('appStoreApp').populate('org').lean();
 
       if (!app) {
