@@ -264,18 +264,20 @@ adminRouter
     // 1. Open websocket connections and connection info
     const devices = connections.getAllDevices();
     result.numConnectedDevices = devices.length;
+    // map organization id => { account, org }, first account wins
+    const orgsMap = new Map();
+    for (const a of accounts.data) {
+      for (const ao of a.organizations) {
+        const orgId = ao.organization_id.toString();
+        if (!orgsMap.has(orgId)) orgsMap.set(orgId, { account: a, org: ao });
+      }
+    }
     devices.forEach(deviceMachineId => {
       const deviceInfo = connections.getDeviceInfo(deviceMachineId);
       const devStatus = deviceStatus.getDeviceStatus(deviceMachineId);
 
-      let deviceOrg = null;
-      const account = accounts.data.find(a => {
-        const org = a.organizations.find(ao => ao.organization_id.toString() === deviceInfo.org);
-        if (org) {
-          deviceOrg = org;
-        }
-        return org !== undefined;
-      });
+      const { account = null, org: deviceOrg = null } =
+        (typeof deviceInfo.org === 'string' && orgsMap.get(deviceInfo.org)) || {};
       result.connectedDevices.push({
         machineID: deviceMachineId,
         status: devStatus ? devStatus.state : 'unknown',
