@@ -1,0 +1,16 @@
+daemon:
+  standalone: false
+agent:
+  features:
+    stun:
+      enabled: false
+    pppoe:
+      enabled: false
+  requests:
+    ignored: [sync-device]
+network:
+  debugger_interface:
+    ethernets:
+      enp0s10:
+        dhcp4: false
+        addresses: [192.168.56.171]

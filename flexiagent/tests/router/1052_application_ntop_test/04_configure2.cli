@@ -1,0 +1,27 @@
+[
+  {
+    "entity": "agent",
+    "message": "add-app-config",
+    "params": {
+      "name": "Flow Monitoring NTOP-NG",
+      "identifier": "com.flexiwan.monitorntop",
+      "applicationParams": {
+        "interfaces": [
+          {
+            "ifName": "__INTERFACE_1__name",
+            "ifType": "__INTERFACE_1__type",
+            "devId": "__INTERFACE_1__dev_id"
+          },
+          {
+            "ifName": "__INTERFACE_2__name",
+            "ifType": "__INTERFACE_2__type",
+            "devId": "__INTERFACE_2__dev_id"
+          }
+        ],
+        "affinity": "1",
+        "serverPort": "9000",
+        "adminPassword": "admin444"
+      }
+    }
+  }
+]

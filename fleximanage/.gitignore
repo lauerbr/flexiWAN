@@ -1,0 +1,26 @@
+# Logs
+*.log
+
+# tars
+*.tar.gz
+
+# Node modules
+node_modules/
+
+# production
+build
+
+# Operating systems related files
+.DS_Store
+
+# debian build
+debian/fleximanage
+
+# IDE files
+.vscode/launch.json
+
+# Jest coverage report
+coverage/
+
+# tmp pki directory
+backend/tmp/openvpn_pki*

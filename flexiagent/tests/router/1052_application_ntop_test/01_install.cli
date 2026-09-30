@@ -1,0 +1,11 @@
+[
+  {
+    "entity": "agent",
+    "message": "add-app-install",
+    "params": {
+      "name": "Flow Monitoring NTOP-NG",
+      "identifier": "com.flexiwan.monitorntop",
+      "applicationParams": {}
+    }
+  }
+]

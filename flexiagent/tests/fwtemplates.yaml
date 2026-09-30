@@ -1,0 +1,117 @@
+# device type: lshw -c system
+# IMPORTANT!
+# The list of dev_ids must be ordered like: (pci:0000:00:08.0, pci:0000:00:09.0, 0000:00:03.0)
+# The last dev_id (INTERFACE_3dev_id) must be the first alphabetic.
+#
+# IMPORTANT!!!!!!!!!!!!!!!!!!!!
+# Some tests uses internet. The assumption is that:
+# INTERFACE_1 should be able to access internet using DHCP
+# INTERFACE_2 should not be able to access internet using DHCP
+# INTERFACE_3 should be able to access internet using DHCP
+devices:
+  globals:
+    INTERFACE_1:
+      addr:         10.0.0.4/24
+      gateway:      10.0.0.10
+      type:         wan
+      deviceType:   dpdk
+      tamper:
+        addr_no_mask: 10.0.0.4
+    INTERFACE_2:
+      addr:         20.20.20.254/24
+      type:         lan
+      routing:      ospf
+      tamper:       # tampered field do not present in final yaml, just their values
+        client:       20.20.20.20
+        addr_no_mask: 20.20.20.254
+        range_start:  20.20.20.50
+        range_end:    20.20.20.100
+    INTERFACE_3:
+      addr:         10.72.100.1/24
+      gateway:      10.72.100.254
+      type:         wan
+      tamper:
+        addr_no_mask: 10.72.100.1
+    WIFI_1:
+      addr:         192.168.60.1/24
+      tamper:
+        range_start:  192.168.60.77
+        range_end:    192.168.60.100
+    PPPoE:
+      if_name:      enp0s9
+      dev_id:       pci:0000:00:09.00
+  VirtualBox:
+    INTERFACE_1:
+      dev_id:       pci:0000:00:08.00
+      name:         enp0s8
+    INTERFACE_2:
+      dev_id:       pci:0000:00:09.00
+      name:         enp0s9
+    INTERFACE_3:
+      dev_id:       pci:0000:00:03.00
+      name:         enp0s3
+  Silicom:
+    INTERFACE_1:
+      dev_id:       pci:0000:04:00.10
+      name:         eth1
+    INTERFACE_2:
+      dev_id:       pci:0000:07:00.00
+      name:         eth2
+    INTERFACE_3:
+      dev_id:       pci:0000:04:00.00
+      name:         eth0
+    LTE_1:
+      dev_id:       usb:usb1/1-1/1-1:1.12
+      apn:          we
+      pin:          ''
+      name:         wwan0
+    WIFI_1:
+      dev_id:       pci:0000:06:00.00
+  Silicom__90500-0151-G01:
+    INTERFACE_1:
+      dev_id:       pci:0000:02:00.10
+      name:         enp2s0f1
+    INTERFACE_2:
+      dev_id:       pci:0000:05:00.00
+      name:         enp5s0f0
+    INTERFACE_3:
+      dev_id:       pci:0000:02:00.00
+      name:         enp2s0f0
+  Advantech:
+    INTERFACE_1:
+      dev_id:       pci:0000:08:00.00
+      name:         eth2
+    INTERFACE_2:
+      dev_id:       pci:0000:08:00.10
+      name:         eth3
+    INTERFACE_3:
+      dev_id:       pci:0000:07:00.00
+      name:         eth1
+    LTE_1:
+      dev_id:       usb:usb1/1-3/1-3:1.4
+      apn:          internet.rl
+      pin:          ''
+      name:         wwan0
+    PPPoE:
+      if_name:      eth4
+      dev_id:       pci:0000:0a:00.00
+  'VMware, Inc.':
+    INTERFACE_1:
+      dev_id:       pci:0000:0b:00.00
+      name:         ens192
+    INTERFACE_2:
+      dev_id:       pci:0000:13:00.00
+      name:         ens224
+    INTERFACE_3:
+      dev_id:       pci:0000:03:00.00
+      name:         ens160
+  QEMU__Standard_PC_(i440FX_+_PIIX,_1996):
+    INTERFACE_1:
+      dev_id:       pci:0000:00:03.00
+      name:         eth0
+    INTERFACE_2:
+      dev_id:       pci:0000:00:04.00
+      name:         eth1
+    INTERFACE_3:
+      dev_id:       pci:0000:00:05.00
+      name:         eth2

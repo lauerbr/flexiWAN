@@ -1,0 +1,121 @@
+[
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "100.100.100.101/32",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false,
+    "condition": {
+      "type": "route-exist",
+      "addr": "1.1.1.1",
+      "via": { "dev_id": "__INTERFACE_3__dev_id" }
+    }
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "100.100.100.102/32",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false,
+    "condition": {
+      "type": "route-exist",
+      "addr": "2.2.2.0/24",
+      "via": { "dev_id": "__INTERFACE_3__dev_id" }
+    }
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "100.100.100.103/32",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false,
+    "condition": {
+      "type": "route-exist",
+      "addr": "3.3.3.3",
+      "via": { "tunnel-id": 1 }
+    }
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "100.100.100.104/32",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false,
+    "condition": {
+      "type": "route-exist",
+      "addr": "4.4.4.4",
+      "via": { "tunnel-id": 1 }
+    }
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "100.100.200.101/32",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false,
+    "condition": {
+      "type": "route-not-exist",
+      "addr": "1.1.1.1",
+      "via": { "dev_id": "__INTERFACE_3__dev_id" }
+    }
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "100.100.200.102/32",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false,
+    "condition": {
+      "type": "route-not-exist",
+      "addr": "2.2.2.2",
+      "via": { "dev_id": "__INTERFACE_3__dev_id" }
+    }
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "100.100.200.103/32",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false,
+    "condition": {
+      "type": "route-not-exist",
+      "addr": "3.3.3.3",
+      "via": { "tunnel-id": 1 }
+    }
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "100.100.200.104/32",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false,
+    "condition": {
+      "type": "route-not-exist",
+      "addr": "4.4.4.4",
+      "via": { "tunnel-id": 1 }
+    }
+  }
+}
+]

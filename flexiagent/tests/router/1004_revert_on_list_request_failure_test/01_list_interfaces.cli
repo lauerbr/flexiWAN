@@ -1,0 +1,27 @@
+[
+{
+  "entity":  "agent",
+  "message": "start-router",
+  "params": {
+    "dev_id": [
+      "__INTERFACE_1__dev_id",
+      "__INTERFACE_2__dev_id"
+    ]
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-interface",
+  "params": [
+    "__INTERFACE_1__",
+    "__INTERFACE_2__",
+    {
+      "dev_id":"0000:00:88.00",
+      "addr": "__INTERFACE_1__addr",
+      "gateway": "__INTERFACE_1__gateway",
+      "type":"wan"
+    }
+  ]
+}
+]

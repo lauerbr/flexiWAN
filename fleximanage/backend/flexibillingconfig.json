@@ -1,0 +1,10 @@
+{
+  "billing": {
+    "subscription": {
+      "max_devices": 999999
+    },
+    "features": {
+      "vpn_portal_users": 999999
+    }
+  }
+}

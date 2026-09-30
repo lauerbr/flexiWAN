@@ -1,0 +1,55 @@
+[
+{
+  "entity": "agent",
+  "message": "start-router",
+  "params": {
+    "interfaces": [
+      "__INTERFACE_1__",
+      "__INTERFACE_2__"
+    ]
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "6.6.6.0/24",
+	"via": "__INTERFACE_1__gateway"
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "9.9.9.9",
+	  "via": "__INTERFACE_2__tamper__addr_no_mask",
+    "dev_id":"__INTERFACE_2__dev_id"
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "remove-route",
+  "params": {
+    "addr": "6.6.6.0/24",
+	"via": "__INTERFACE_1__gateway"
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "remove-route",
+  "params": {
+    "addr": "9.9.9.9",
+	  "via": "__INTERFACE_2__tamper__addr_no_mask",
+    "dev_id":"__INTERFACE_2__dev_id"
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "stop-router"
+}
+]

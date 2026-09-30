@@ -1,0 +1,28 @@
+[{
+  "entity": "agent",
+  "message": "add-multilink-policy",
+  "params": {
+    "id": "5ed4127aa81d8258b96b4853",
+    "rules": [
+      {
+        "id": "1",
+        "priority": 0,
+        "classification": {
+          "prefix": {},
+          "application": {
+            "appId": "1"
+          }
+        },
+        "action": {
+          "links": [
+            {
+              "pathlabels": [ "green" , "blue" ]
+            }
+          ],
+          "order": "priority"
+        }
+      }
+    ]
+  }
+}
+]
