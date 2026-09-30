@@ -18,16 +18,14 @@
 /* eslint-disable max-len */
 const deviceStatus = require('../deviceStatus')();
 const configs = require('../../configs')();
-// deviceQueues and roleSelector is needed to release resources when the test finishes
+// deviceQueues is needed to release resources when the test finishes
 // otherwise the test stuck and not finished
 const deviceQueues = require('../../utils/deviceQueue')(
   configs.get('kuePrefix'),
   configs.get('redisUrl')
 );
-const roleSelector = require('../../utils/roleSelector')(configs.get('redisUrl'));
 afterAll(() => {
   deviceQueues.shutdown();
-  roleSelector.shutDown();
 });
 
 let deviceStatsMsg;

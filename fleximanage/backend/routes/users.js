@@ -19,7 +19,6 @@ var configs = require('../configs')();
 const express = require('express');
 const router = express.Router();
 const createError = require('http-errors');
-const bodyParser = require('body-parser');
 const User = require('../models/users');
 const Account = require('../models/accounts');
 const { membership, preDefinedPermissions } = require('../models/membership');
@@ -46,7 +45,7 @@ const RateLimitStore = require('../rateLimitStore');
 const mongoose = require('mongoose');
 const { isNonEmptyString } = require('../utils/security');
 
-router.use(bodyParser.json());
+router.use(express.json());
 
 // Validity period of the e-mail verification link
 const VERIFY_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days

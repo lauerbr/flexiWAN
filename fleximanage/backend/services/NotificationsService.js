@@ -34,7 +34,7 @@ const { apply } = require('../deviceLogic/deviceNotifications');
 const keyBy = require('lodash/keyBy');
 const groupBy = require('lodash/groupBy');
 const notificationsMgr = require('../notifications/notifications')();
-const { validateNotificationsSettings, validateNotificationsThresholds, validateEmailNotifications, validateWebhookSettings } = require('../models/validators');
+const { validateNotificationsSettings, validateEmailNotifications, validateWebhookSettings } = require('../models/validators');
 const mongoConns = require('../mongoConns.js')();
 const createError = require('http-errors');
 
@@ -459,34 +459,6 @@ class NotificationsService {
         e.message || 'Internal Server Error',
         e.status || 500
       );
-    }
-  }
-
-  /**
-  * Send the notifications settings of numeric fields to validation
-  * If one of the new fields value is "varies" it means we should use the original value
-  * in the validation in order to make sure that the other value is valid (bigger/smaller than the other)
-  * @param newRulesEventSettings Object of a specific event type settings, sent by the user
-  * @param currentRuleEventSettings Object of a specific event type settings, taken from the original organization settings
-  **/
-  static validateThresholds (newRulesEventSettings, currentRuleEventSettings, eventName) {
-    let { warningThreshold, criticalThreshold } = newRulesEventSettings;
-    if (warningThreshold === 'varies') {
-      warningThreshold = currentRuleEventSettings.warningThreshold;
-    }
-
-    if (criticalThreshold === 'varies') {
-      criticalThreshold = currentRuleEventSettings.criticalThreshold;
-    }
-
-    const validRule = validateNotificationsThresholds({ [eventName]: { warningThreshold, criticalThreshold } });
-
-    if (!validRule.valid) {
-      throw new CustomError({
-        status: 400,
-        message: 'Invalid notification settings',
-        data: validRule.errors
-      });
     }
   }
 

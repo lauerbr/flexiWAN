@@ -168,17 +168,6 @@ const setUserPerms = async (user, jwtPayload, token = null) => {
   return true;
 };
 
-// const extractUserFromToken = (req) => {
-//     if (!req.headers || !req.headers.authorization) return "";
-
-//     try {
-//         const decoded = jwt.verify(req.headers.authorization, secret.secretToken);
-//         return decoded.id;
-//     } catch (err) {
-//         return "";
-//     }
-// };
-
 // Authentication verification for local and JWT strategy, and populate req.user
 exports.verifyUserLocal = async function (req, res, next) {
   // Verify captcha

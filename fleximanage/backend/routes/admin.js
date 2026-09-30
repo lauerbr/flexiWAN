@@ -16,7 +16,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('./cors');
 const auth = require('../authenticate');
 const connections = require('../websocket/Connections')();
@@ -29,7 +28,7 @@ const logger = require('../logging/logging')({ module: module.filename, type: 'r
 const keyBy = require('lodash/keyBy');
 
 const adminRouter = express.Router();
-adminRouter.use(bodyParser.json());
+adminRouter.use(express.json());
 
 /**
  * This route is allowed only if the organization is marked as admin

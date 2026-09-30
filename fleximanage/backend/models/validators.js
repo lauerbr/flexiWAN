@@ -17,9 +17,7 @@
 
 const net = require('net');
 const email = require('isemail');
-const urlValidator = require('valid-url');
 const validator = require('validator');
-const filenamify = require('filenamify');
 const phoneUtil = require('google-libphonenumber').PhoneNumberUtil.getInstance();
 const configs = require('../configs')();
 const IPCidr = require('ip-cidr');
@@ -32,10 +30,6 @@ const interfaceTypes = ['WAN', 'LAN', 'TRUNK', 'NONE'];
 
 // Helper functions
 const isEmpty = (val) => { return val === null || val === undefined; };
-const isValidURL = (url) => { return urlValidator.isUri(url) !== undefined; };
-const isValidFileName = (name) => {
-  return !isEmpty(name) && name !== '' && filenamify(name) === name;
-};
 const validateIsInteger = val => /^[1-9]\d+|^\d$/.test(val);
 
 const validateIsPhoneNumber = (number) => {
@@ -179,10 +173,6 @@ const validateSerial = (id) => {
   /^[a-z0-9-_ .#%/():[\]]{0,250}$/i.test(id || '');
 };
 const validateTokenName = (name) => { return /^[a-z0-9-_ .!#%():@[\]]{3,15}$/i.test(name || ''); };
-
-const validateURL = (url) => { return !isEmpty(url) && isValidURL(url); };
-const validateFileName = (name) => { return isValidFileName(name); };
-const validateFieldName = (name) => { return /^[a-z0-9-. ]{1,100}$/i.test(name || ''); };
 
 const validateUserName = name => {
   return (
@@ -471,9 +461,6 @@ module.exports = {
   validateMachineID,
   validateSerial,
   validateTokenName,
-  validateURL,
-  validateFileName,
-  validateFieldName,
   validateUserName,
   validateEmail,
   validateIsPhoneNumber,

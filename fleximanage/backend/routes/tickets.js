@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('./cors');
 const auth = require('../authenticate');
 const zendesk = require('node-zendesk');
@@ -23,7 +22,7 @@ const createError = require('http-errors');
 const logger = require('../logging/logging')({ module: module.filename, type: 'req' });
 
 const ticketsRouter = express.Router();
-ticketsRouter.use(bodyParser.json());
+ticketsRouter.use(express.json());
 
 /**
  * This route is allowed only if the organization is marked as admin

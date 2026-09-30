@@ -382,39 +382,6 @@ const orgUpdateFromNull = async ({ user }, res) => {
   return true;
 };
 
-// /**
-//  * Update default organization when it's null and refresh token
-//  * If defaultOrg is null, will to find a new organization and update the req with it
-//  * @param {*} req - req with updated user account info
-//  * @param {*} res - res with updated token if necessary
-//  */
-// const orgUpdateFromNull = async (req, res) => {
-//   if (req.user.defaultOrg == null) {
-//     let org0 = null;
-//     try {
-//       const orgs = await getUserOrganizations(req.user);
-//       org0 = orgs[Object.keys(orgs)[0]];
-//       if (org0) {
-//         await User.updateOne({ _id: req.user._id }, { defaultOrg: org0._id });
-//         req.user.defaultOrg = org0;
-//       }
-//       // Refresh JWT with new values
-//       const token = await getToken(req, {
-//         account: req.user.defaultAccount._id,
-//         accountName: req.user.defaultAccount.name,
-//         org: org0 ? org0._id : null,
-//         orgName: org0 ? org0.name : null
-//       });
-//       res.setHeader('Refresh-JWT', token);
-//     } catch (err) {
-//       logger.error('Could not update organization',
-//         { params: { userId: req.user._id, message: err.message }, req: req });
-//       return false;
-//     }
-//   }
-//   return true;
-// };
-
 // Default exports
 module.exports = {
   getUserOrganizations: getUserOrganizations,

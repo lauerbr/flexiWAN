@@ -29,7 +29,6 @@ const cookieParser = require('cookie-parser');
 const OpenApiValidator = require('express-openapi-validator');
 const openapiRouter = require('./utils/openapiRouter');
 const createError = require('http-errors');
-// const session = require('express-session');
 const passport = require('passport');
 const auth = require('./authenticate');
 const { connectRouter } = require('./routes/connect');
@@ -69,7 +68,6 @@ const ticketsRouter = require('./routes/tickets')(
 const WebSocket = require('ws');
 const connections = require('./websocket/Connections')();
 const broker = require('./broker/broker.js');
-const roleSelector = require('./utils/roleSelector')(configs.get('redisUrl'));
 
 class ExpressServer {
   constructor (port, securePort, openApiYaml) {
@@ -100,26 +98,6 @@ class ExpressServer {
   }
 
   async setupMiddleware () {
-    // this.setupAllowedMedia();
-    // this.app.use((req, res, next) => {
-    //   console.log(`${req.method}: ${req.url}`);
-    //   return next();
-    // });
-
-    // A middleware that adds a unique request ID for each request
-    // or uses the existing request ID, if there is one.
-    // THIS MIDDLEWARE MUST BE ASSIGNED FIRST.
-    // this.app.use((req, res, next) => {
-    //   // Add unique ID to each request
-    //   req.id = req.get('X-Request-Id') || uuid();
-    //   res.set('X-Request-Id', req.id);
-
-    //   // Set the remote address IP on the request
-    //   req.ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-
-    //   next();
-    // });
-
     // Needed to get the public IP if behind a proxy. Trust only the configured
     // number of hops / addresses, otherwise X-Forwarded-For can be spoofed by clients
     this.app.set('trust proxy', ExpressServer.getTrustProxySetting());
@@ -129,10 +107,6 @@ class ExpressServer {
 
     // Basic security headers
     this.app.use(ExpressServer.securityHeaders);
-
-    // Initialize websocket traffic handler role selector
-    // On every new websocket connection it will try to set itself as active
-    roleSelector.initializeSelector('websocketHandler');
 
     // Start periodic device tasks
     deviceStatus.start();
@@ -237,31 +211,11 @@ class ExpressServer {
 
     this.app.use(cors.corsWithOptions);
     this.app.use(auth.verifyUserJWT);
-    // this.app.use(auth.verifyPermission);
-
-    try {
-      // FIXME: temporary map the OLD routes
-      // this.app.use('/api/devices', require('./routes/devices'));
-      // this.app.use('/api/devicestats', require('./routes/deviceStats'));
-      // this.app.use('/api/jobs', require('./routes/deviceQueue'));
-      this.app.use('/api/portals', require('./routes/portals'));
-    } catch (error) {
-      logger.error('Error: Can\'t connect OLD routes');
-    }
 
     // Intialize routes
+    this.app.use('/api/portals', require('./routes/portals'));
     this.app.use('/api/admin', adminRouter);
     this.app.use('/api/tickets', ticketsRouter);
-
-    // reserved for future use
-    // this.app.get('/login-redirect', (req, res) => {
-    //   res.status(200);
-    //   res.json(req.query);
-    // });
-    // this.app.get('/oauth2-redirect.html', (req, res) => {
-    //   res.status(200);
-    //   res.json(req.query);
-    // });
 
     this.app.use(
       OpenApiValidator.middleware({
