@@ -31,6 +31,7 @@ def fwagent_signal_handler(signum, frame):
 signal.signal(signal.SIGINT, fwagent_signal_handler)
 
 import enum
+import fnmatch
 import json
 import os
 import glob
@@ -65,6 +66,7 @@ import fwlte
 import fwmultilink
 import fw_os_utils
 import fw_redact
+import fw_input_validation
 import fwpppoe
 import fwrouter_cfg
 import fwthread
@@ -133,6 +135,33 @@ class FwAgent(FwObject):
         self.ws.finalize()
         super().finalize()
 
+    def _is_allowed_token_url(self, url):
+        """Check the URL received in the 'server' or 'repo' claim of the token.
+        The agent can't verify the token signature (it has no secret), so the claims
+        are not trusted: require HTTPS (HTTP is allowed only if 'bypass_certificate'
+        is set explicitly in fwagent_conf.yaml for development setups), and if
+        'token_allowed_hosts' is configured in fwagent_conf.yaml, the host must match
+        one of its patterns (e.g. '*.flexiwan.com').
+        """
+        if not isinstance(url, str) or not url or fw_input_validation.has_control_chars(url) or \
+           any(c in url for c in ' "\'`$\\'):
+            return False
+        try:
+            parsed = uparse.urlparse(url)
+            host = parsed.hostname
+        except ValueError:
+            return False
+        if parsed.scheme != 'https' and not (parsed.scheme == 'http' and fwglobals.g.cfg.BYPASS_CERT):
+            self.log.error(f"token: URL {url} must use https")
+            return False
+        if not host or not fw_input_validation.is_valid_host(host):
+            return False
+        allowed_hosts = fwglobals.g.cfg.TOKEN_ALLOWED_HOSTS
+        if allowed_hosts and not any(fnmatch.fnmatch(host.lower(), str(p).lower()) for p in allowed_hosts):
+            self.log.error(f"token: host {host} is not in token_allowed_hosts {allowed_hosts}")
+            return False
+        return True
+
     def _setup_repository(self, repo):
         # Extract repo info. e.g. 'https://deb.flexiwan.com|flexiWAN|main'
         repo_split = repo.split('|')
@@ -140,6 +169,11 @@ class FwAgent(FwObject):
             self.log.error("Registration error: Incorrect repository info %s" % (repo))
             return False
         repo_server, repo_repo, repo_name = repo_split[0], repo_split[1], repo_split[2]
+        # The values are written into apt source file, so validate them
+        if not self._is_allowed_token_url(repo_server) or \
+           not re.fullmatch(r'[A-Za-z0-9._~/-]+', repo_repo) or not re.fullmatch(r'[A-Za-z0-9._-]+', repo_name):
+            self.log.error("Registration error: repository info is not allowed %s" % (repo))
+            return False
         # Get current repo configuration
         repo_files = glob.glob(fwglobals.g.REPO_SOURCE_DIR + "flexiwan*")
         if len(repo_files) != 1:
@@ -186,7 +220,7 @@ class FwAgent(FwObject):
         try:
             parsed_token = jwt.decode(token, options={"verify_signature": False})
         except Exception as _e:
-            self.log.error(f"invalid token: '{token}'")
+            self.log.error(f"invalid token (length={len(token) if token else 0})")
             raise _e
 
         # If repository defined in token, make sure device works with that repo
@@ -200,6 +234,10 @@ class FwAgent(FwObject):
         # Setup the flexiManage server to work with
         server = parsed_token.get('server')
         if server:
+            if not self._is_allowed_token_url(server):
+                raise AssertionError(f"management server {server} from token is not allowed")
+            if server != fwglobals.g.cfg.MANAGEMENT_URL:
+                self.log.warning(f"management url from token {server} differs from configured {fwglobals.g.cfg.MANAGEMENT_URL}")
             # Use server from token
             fwglobals.g.cfg.MANAGEMENT_URL = server
             self.log.info(f"use management url from token: {server}")

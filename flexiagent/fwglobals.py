@@ -215,6 +215,7 @@ class Fwglobals(FwObject):
             DEFAULT_MANAGEMENT_URL = 'https://manage.flexiwan.com:443'
             DEFAULT_TOKEN_FILE     = data_path + 'token.txt'
             DEFAULT_UUID           = None
+            DEFAULT_TOKEN_ALLOWED_HOSTS = []
             DEFAULT_WAN_MONITOR_UNASSIGNED_INTERFACES = True
             DEFAULT_WAN_MONITOR_SERVERS = ['1.1.1.1','8.8.8.8']
             DEFAULT_WAN_MONITOR_PROBE_TIMEOUT = 1000  # msec
@@ -238,6 +239,9 @@ class Fwglobals(FwObject):
                 self.MANAGEMENT_URL = agent_conf.get('server', DEFAULT_MANAGEMENT_URL)
                 self.TOKEN_FILE     = agent_conf.get('token',  DEFAULT_TOKEN_FILE)
                 self.UUID           = agent_conf.get('uuid',   DEFAULT_UUID)
+                # Host name patterns (fnmatch) allowed for 'server'/'repo' claims of the token.
+                # Empty list means any host is allowed (HTTPS is required anyway).
+                self.TOKEN_ALLOWED_HOSTS = agent_conf.get('token_allowed_hosts', DEFAULT_TOKEN_ALLOWED_HOSTS) or []
 
                 # WAN Monitoring
                 self.WAN_MONITOR_UNASSIGNED_INTERFACES = agent_conf.get('monitor_wan',{}).get('monitor_unassigned_interfaces', DEFAULT_WAN_MONITOR_UNASSIGNED_INTERFACES)
@@ -284,6 +288,7 @@ class Fwglobals(FwObject):
                 self.MANAGEMENT_URL = DEFAULT_MANAGEMENT_URL
                 self.TOKEN_FILE     = DEFAULT_TOKEN_FILE
                 self.UUID           = DEFAULT_UUID
+                self.TOKEN_ALLOWED_HOSTS = DEFAULT_TOKEN_ALLOWED_HOSTS
                 self.DAEMON_SOCKET_NAME                = DEFAULT_DAEMON_SOCKET_NAME
                 self.WATCHDOG_DEADLOCK_ENABLED         = DEFAULT_WATCHDOG_DEADLOCK_ENABLED
                 self.WAN_MONITOR_UNASSIGNED_INTERFACES = DEFAULT_WAN_MONITOR_UNASSIGNED_INTERFACES
