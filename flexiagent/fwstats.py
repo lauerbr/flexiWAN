@@ -213,7 +213,7 @@ class FwStatistics(FwObject):
                                     t_stats.update(calc_stats)
                             else:
                                 # For other interfaces try to get interface id
-                                dev_id = fwutils.vpp_if_name_to_dev_id(iface)
+                                dev_id = fwutils.vpp_if_name_to_dev_id(iface, use_negative_cache=True)
                                 if dev_id:
                                     if_bytes[dev_id] = calc_stats
 

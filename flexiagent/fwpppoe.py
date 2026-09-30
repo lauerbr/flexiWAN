@@ -291,6 +291,7 @@ class FwPppoeConnection():
             del fwglobals.g.cache.dev_id_to_vpp_if_name[self.dev_id]
         if self.tun_vpp_if_name in fwglobals.g.cache.vpp_if_name_to_dev_id:
             del fwglobals.g.cache.vpp_if_name_to_dev_id[self.tun_vpp_if_name]
+        fwutils.clear_vpp_if_name_negative_cache()
         self._cache_if_names_remove(
             {self.tun_if_name, self.tun_vpp_if_name,  self.tun_vppsb_if_name, self.if_name},
             vpp_if_name=self.tun_vpp_if_name)

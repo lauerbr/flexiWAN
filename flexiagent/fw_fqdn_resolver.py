@@ -28,7 +28,8 @@ import fwutils
 
 from fwobject import FwObject
 
-RESOLUTION_COUNT    = 5
+RESOLUTION_COUNT    = 5     # Max number of FQDN-s to resolve in one pass
+RESOLUTION_TIMEOUT  = 10    # Max time (in seconds) to wait for DNS resolution in one pass
 
 class FwFqdnResolver(FwObject):
     def __init__(self):
@@ -37,6 +38,7 @@ class FwFqdnResolver(FwObject):
         self.db_prefix = 'fqdn_resolver'
         self.thread_monitor_fqdn = None
         self.lock = threading.RLock() # RLock since callbacks can call "set" or "unset"
+        self.lookup_threads = {}      # FQDN -> thread that runs DNS lookup, see _resolve()
 
     def __enter__(self):
         return self
@@ -125,29 +127,94 @@ class FwFqdnResolver(FwObject):
             self.log.error(f'failed to execute DNS Lookup for {fqdn}: {e}')
             return []
 
+    def _get_fqdns_to_resolve(self):
+        """Returns list of FQDN-s that should be resolved in this pass."""
+        fqdns_to_resolve = []
+        fqdns = dict(self.db.fetch(self.db_prefix, {}))
+        for fqdn, data in fqdns.items():
+            if len(fqdns_to_resolve) >= RESOLUTION_COUNT:
+                break
+
+            callbacks            = data.get('callbacks')
+            last_resolution      = data.get('last_resolution')
+
+            if not callbacks:
+                continue
+
+            if last_resolution and (time.time() - last_resolution) < fwglobals.g.cfg.FQDN_RESOLUTION_INTERVAL:
+                continue
+
+            fqdns_to_resolve.append(fqdn)
+        return fqdns_to_resolve
+
+    def _resolve(self, fqdns):
+        """Resolves FQDN-s simultaneously with timeout.
+        The socket.gethostbyname_ex() has no timeout, so every lookup is run
+        by dedicated daemon thread, and we wait for them no more than RESOLUTION_TIMEOUT.
+        Daemon threads that did not finish in time do not block the agent exit.
+
+        :returns: dictionary of FQDN -> list of IP-s. FQDN-s that were not
+                  resolved in time are not included.
+        """
+        results = {}
+        def _lookup(fqdn):
+            results[fqdn] = self._exec_dns_lookup(fqdn)
+
+        # Forget finished lookups of previous passes.
+        #
+        for fqdn, thread in list(self.lookup_threads.items()):
+            if not thread.is_alive():
+                del self.lookup_threads[fqdn]
+
+        threads = []
+        for fqdn in fqdns:
+            if fqdn in self.lookup_threads:
+                continue    # lookup started on previous pass still hangs, don't start one more
+            thread = threading.Thread(target=_lookup, args=(fqdn,), name=f'FQDN lookup {fqdn}', daemon=True)
+            thread.start()
+            self.lookup_threads[fqdn] = thread
+            threads.append(thread)
+
+        deadline = time.monotonic() + RESOLUTION_TIMEOUT
+        for thread in threads:
+            thread.join(max(0, deadline - time.monotonic()))
+
+        resolved = {}
+        for fqdn in fqdns:
+            if fqdn in results:
+                resolved[fqdn] = results[fqdn]
+            else:
+                self.log.debug(f'DNS lookup for {fqdn} was not finished in time, retry on next pass')
+        return resolved
+
     def monitor_thread_func(self, ticks):
         if not fwglobals.g.router_api.state_is_started():
             return
 
         with self.lock:
+            fqdns_to_resolve = self._get_fqdns_to_resolve()
+        if not fqdns_to_resolve:
+            return
+
+        # Resolve out of lock, as DNS lookups might take long time,
+        # and configuration requests might need the lock to call set() or unset().
+        #
+        resolved = self._resolve(fqdns_to_resolve)
+
+        with self.lock:
             checked_keys = []
             fqdns = dict(self.db.fetch(self.db_prefix, {}))
-            for fqdn, data in fqdns.items():
-                if len(checked_keys) >= RESOLUTION_COUNT:
-                    break
+            for fqdn, ip_addresses in resolved.items():
+
+                # The FQDN might be removed or changed while we resolved it,
+                # so use the updated data.
+                #
+                data = fqdns.get(fqdn)
+                if not data or not data.get('callbacks'):
+                    continue
 
                 current_ip_addresses = data.get('ips')
-                callbacks            = data.get('callbacks')
-                last_resolution      = data.get('last_resolution')
                 execute_callbacks    = data.get('execute_callbacks')
-
-                if not callbacks:
-                    continue
-
-                if last_resolution and (time.time() - last_resolution) < fwglobals.g.cfg.FQDN_RESOLUTION_INTERVAL:
-                    continue
-
-                ip_addresses = self._exec_dns_lookup(fqdn)
 
                 checked_keys.append(fqdn)
                 self._update_db(fqdn, 'last_resolution', time.time())
@@ -161,8 +228,9 @@ class FwFqdnResolver(FwObject):
             # now, put the checked FQDNs at the end of the dict
             fqdns = dict(self.db.fetch(self.db_prefix, {}))
             for checked_key in checked_keys:
-                value = fqdns.pop(checked_key)
-                fqdns[checked_key] = value
+                value = fqdns.pop(checked_key, None)
+                if value is not None:
+                    fqdns[checked_key] = value
             self.db.put(self.db_prefix, fqdns)
 
     def _update_db(self, fqdn, key, value):

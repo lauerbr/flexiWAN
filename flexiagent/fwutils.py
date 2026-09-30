@@ -39,6 +39,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import zlib
@@ -233,7 +234,7 @@ def get_default_route(if_name=None, resolve_dev_id=True):
     metric = None
 
     try:
-        output = os.popen('ip route list match default').read()
+        output = subprocess.check_output(['ip', 'route', 'list', 'match', 'default'], stderr=subprocess.DEVNULL).decode()
     except:
         return ("", "", "", "", None)
 
@@ -304,7 +305,7 @@ def get_interface_gateway(if_name, if_dev_id=None, cached=True):
 
     return '', ''
 
-def get_interface_gateway_from_linux(if_name):
+def get_interface_gateway_from_linux(if_name, routes_linux=None):
     """
     Retrieve the default gateway IP address and metric for a given interface from the Linux routing table.
 
@@ -317,6 +318,8 @@ def get_interface_gateway_from_linux(if_name):
     related interfaces to ensure we capture the correct route.
 
     :param if_name: The name of the interface.
+    :param routes_linux: FwLinuxRoutes(prefix='0.0.0.0/0') object. If not provided,
+                    the default routes are fetched from Linux by this function.
     :return: A tuple (gateway_ip, metric_as_string). Returns ('', '') if no matching route is found.
     """
     possible_interfaces = {if_name}
@@ -335,7 +338,8 @@ def get_interface_gateway_from_linux(if_name):
             possible_interfaces.add(pppoe_connection.tun_vppsb_if_name)
 
     # Retrieve the default route (0.0.0.0/0) from the Linux routing table.
-    routes_linux = FwLinuxRoutes(prefix='0.0.0.0/0')
+    if routes_linux is None:
+        routes_linux = FwLinuxRoutes(prefix='0.0.0.0/0')
     for route in routes_linux.values():
         if route.dev in possible_interfaces:
             return pppoe_gw if pppoe_gw else route.via, str(route.metric)
@@ -627,6 +631,8 @@ def get_linux_interfaces(cached=True, if_dev_id=None):
         interfaces.clear()
 
         linux_inf = psutil.net_if_addrs()
+        linux_stats = psutil.net_if_stats()    # fetch once for all interfaces
+        linux_default_routes = FwLinuxRoutes(prefix='0.0.0.0/0')
         linux_dns = get_linux_dns()
         vpp_does_run = fw_os_utils.vpp_does_run()
         vpp_if_name_by_tap = vpp_get_tap_inject_mapping() if vpp_does_run else {}
@@ -664,7 +670,7 @@ def get_linux_interfaces(cached=True, if_dev_id=None):
 
             interface['dhcp'] = get_interface_is_dhcp(if_name)
 
-            interface['mtu'] = get_linux_interface_mtu(if_name)
+            interface['mtu'] = get_linux_interface_mtu(if_name, linux_stats)
 
             is_pppoe = fwpppoe.is_pppoe_interface(if_name=if_name)
             is_wifi = fwwifi.is_wifi_interface(if_name)
@@ -696,7 +702,7 @@ def get_linux_interfaces(cached=True, if_dev_id=None):
                 if is_lte or is_wifi:
                     tap_name = dev_id_to_tap(dev_id, check_vpp_state=True)
                     if tap_name:
-                        interface['mtu'] = get_linux_interface_mtu(tap_name)
+                        interface['mtu'] = get_linux_interface_mtu(tap_name, linux_stats)
 
                 # bridged interface is only when vpp is running
                 bridge_addr = is_bridged_interface(dev_id)
@@ -709,7 +715,7 @@ def get_linux_interfaces(cached=True, if_dev_id=None):
                     interface['tap_name'] = tap_name
 
 
-            interface['gateway'], interface['metric'] = get_interface_gateway_from_linux(if_name)
+            interface['gateway'], interface['metric'] = get_interface_gateway_from_linux(if_name, linux_default_routes)
 
             dns_servers = linux_dns.get(if_name, {}).get('Current DNS Server')
             interface['dns_servers'] = [dns_servers] if dns_servers is not None else []
@@ -883,8 +889,8 @@ def get_interface_dev_id(if_name, vpp_if_name=None):
             # it is probably virtual device created by user. Blacklist it to avoid periodical resolutions
             # of dev-id for this interface thus wasting CPU cycles and flooding log with errors.
             try:
-                subprocess.check_call(f"sudo ls -l /sys/class/net/ | grep -E '{if_name} -> .*virtual' > /dev/null 2>&1", shell=True)
-                fwglobals.g.cache.blacklist_interfaces.update({if_name: None})
+                if 'virtual' in os.readlink(os.path.join(fw_os_utils.SYS_CLASS_NET, if_name)):
+                    fwglobals.g.cache.blacklist_interfaces.update({if_name: None})
             except:
                 pass
             return ''
@@ -905,12 +911,7 @@ def get_interface_dev_id(if_name, vpp_if_name=None):
 
 def get_sys_class_net_lines():
     try:
-        cmd = "sudo ls -l /sys/class/net"
-        out = subprocess.check_output(cmd, shell=True).decode()
-        lines = out.splitlines()
-        if 'total' in lines[0]:
-            del lines[0]
-        return lines
+        return fw_os_utils.sys_class_net_lines()
     except Exception as e:
         fwglobals.log.error(f'get_sys_class_net_lines() failed: {e}')
         return []
@@ -984,13 +985,10 @@ def dev_id_to_linux_if(dev_id):
     dev_id = dev_id_to_short(dev_id)
     _, addr = dev_id_parse(dev_id)
 
-    try:
-        output = subprocess.check_output("sudo ls -l /sys/class/net/ | grep " + addr, shell=True).decode()
-    except:
+    lines = fw_os_utils.sys_class_net_grep(addr) if addr else []
+    if not lines:
         return None
-    if output is None:
-        return None
-    return output.rstrip().split('/')[-1]
+    return lines[-1].rstrip().split('/')[-1]
 
 def dev_id_to_linux_if_name(dev_id, support_unassigned_dev_id=False):
     """Convert device bus address into Linux interface name.
@@ -1069,16 +1067,49 @@ def dev_id_to_vpp_if_name(dev_id):
 # 'vpp_if_name_to_dev_id' function maps interface name, eg. 'GigabitEthernet0/8/0'
 # into the dev id of that interface, eg. '0000:00:08.00'.
 # We use the interface cache mapping, if doesn't exist we rebuild the cache
-def vpp_if_name_to_dev_id(vpp_if_name):
+def vpp_if_name_to_dev_id(vpp_if_name, use_negative_cache=False):
     """Convert vpp interface name address into interface bus address.
 
-    :param vpp_if_name:      VPP interface name.
+    :param vpp_if_name:        VPP interface name.
+    :param use_negative_cache: if True and the name was not resolved recently,
+                        return None without rebuilding of the mapping cache.
+                        This is to be used by periodic monitoring threads for
+                        VPP interfaces that have no dev_id, as the rebuild is
+                        expensive. The negative cache is cleared on any
+                        configuration change and after VPP_IF_NAME_NEGATIVE_CACHE_TTL.
 
     :returns: Interface bus address.
     """
     dev_id = fwglobals.g.cache.vpp_if_name_to_dev_id.get(vpp_if_name)
-    if dev_id: return dev_id
-    else: return _build_dev_id_to_vpp_if_name_maps(None, vpp_if_name)
+    if dev_id:
+        return dev_id
+
+    if use_negative_cache:
+        with _vpp_if_name_negative_cache_lock:
+            expiration = _vpp_if_name_negative_cache.get(vpp_if_name)
+        if expiration and expiration > time.monotonic():
+            return None
+
+    dev_id = _build_dev_id_to_vpp_if_name_maps(None, vpp_if_name)
+
+    if use_negative_cache and not dev_id:
+        with _vpp_if_name_negative_cache_lock:
+            _vpp_if_name_negative_cache[vpp_if_name] = time.monotonic() + VPP_IF_NAME_NEGATIVE_CACHE_TTL
+    return dev_id
+
+# Cache of VPP interface names that were not resolved into dev_id by
+# vpp_if_name_to_dev_id(use_negative_cache=True): vpp_if_name -> expiration time.
+#
+VPP_IF_NAME_NEGATIVE_CACHE_TTL   = 60
+_vpp_if_name_negative_cache      = {}
+_vpp_if_name_negative_cache_lock = threading.Lock()
+
+def clear_vpp_if_name_negative_cache():
+    """Clears cache of VPP interface names that were not resolved into dev_id.
+    Should be called whenever VPP interfaces might be added or removed.
+    """
+    with _vpp_if_name_negative_cache_lock:
+        _vpp_if_name_negative_cache.clear()
 
 # '_build_dev_id_to_vpp_if_name_maps' function build the local caches of
 # device bus address to vpp_if_name and vise vera
@@ -1144,8 +1175,10 @@ def _build_dev_id_to_vpp_if_name_maps(dev_id, vpp_if_name):
         # 'grep {linux_dev_name}' is used to find full name (wwp0s21u1i12) based on truncated name (wp0s21u1i12).
         #
         try:
-            cmd =  f"ls -l /sys/class/net | grep -v {linux_tap} | grep {linux_dev_name}"
-            linux_dev_name = subprocess.check_output(cmd, shell=True).decode().strip().split('/')[-1]
+            lines = fw_os_utils.sys_class_net_grep(linux_dev_name, exclude=linux_tap)
+            if not lines:
+                raise Exception(f"{linux_dev_name} was not found in /sys/class/net")
+            linux_dev_name = lines[-1].strip().split('/')[-1]
 
             bus = build_interface_dev_id(linux_dev_name)            # fetch bus address of wwan0
             if bus:
@@ -1740,10 +1773,7 @@ def vpp_sw_if_index_to_tap(sw_if_index):
     return tap_if_name
 
 def get_interface_linux_carrier_value(if_name):
-    (ok, status_linux) = fwutils.exec(f"cat /sys/class/net/{if_name}/carrier")
-    if not ok:
-        return None
-    return status_linux.strip()
+    return fw_os_utils.sys_class_net_read(if_name, 'carrier')
 
 def vpp_get_interface_status(sw_if_index=None, dev_id=None, print_exception_on_error=True):
     """Get VPP interface state.
@@ -1782,6 +1812,23 @@ def vpp_get_interface_status(sw_if_index=None, dev_id=None, print_exception_on_e
         return {}
 
 
+def _vpp_cli_inband(cmd):
+    """Runs VPP CLI command using the 'cli_inband' VPP API, if the agent is
+    connected to VPP.
+
+    :returns: the command output, or None if the agent is not connected to VPP
+              or the API call failed. In the latest case the caller should use 'vppctl'.
+    """
+    try:
+        router_api = getattr(fwglobals.g, 'router_api', None) if fwglobals.g_initialized else None
+        vpp_api    = getattr(router_api, 'vpp_api', None) if router_api else None
+        if not vpp_api or not vpp_api.connected_to_vpp:
+            return None
+        return vpp_api.cli(cmd)
+    except Exception as e:
+        fwglobals.log.debug(f"_vpp_cli_inband({cmd}) failed: {str(e)}, fallback to vppctl")
+        return None
+
 def _vppctl_read(cmd, wait=True):
     """Read command from VPP.
 
@@ -1790,6 +1837,13 @@ def _vppctl_read(cmd, wait=True):
 
     :returns: Output returned bu vppctl.
     """
+
+    # If the VPP API connection is up, run the command by the 'cli_inband' API.
+    # That saves spawning 'vppctl' processes. Fall back to 'vppctl' on failure.
+    #
+    output = _vpp_cli_inband(cmd)
+    if output is not None:
+        return output
 
     # Give one optimistic shot before going into cycles
     try:
@@ -2681,7 +2735,7 @@ def reset_traffic_control():
 
 def remove_linux_bridges():
     try:
-        lines = subprocess.check_output('ls -l /sys/class/net/ | grep br_', shell=True).decode().splitlines()
+        lines = fw_os_utils.sys_class_net_grep('br_')
         for line in lines:
             bridge_name = line.rstrip().split('/')[-1]
             try:
@@ -3230,6 +3284,14 @@ def get_interface_link_state(if_name, dev_id, device_type=None):
         return ''
 
     def _return_ethtool_value(if_name):
+        # Read the carrier from sysfs to avoid spawning 'ethtool' for every
+        # interface periodically. The 'carrier' can't be read if interface is
+        # administratively down, so fall back to 'ethtool' in that case.
+        carrier = fw_os_utils.sys_class_net_read(if_name, 'carrier')
+        if carrier == '1':
+            return 'up'
+        if carrier == '0':
+            return 'down'
         state = get_ethtool_value(if_name, 'Link detected')
         # 'Link detected' field has yes/no values, so conversion is needed
         return 'up' if state == 'yes' else 'down' if state == 'no' else ''
@@ -3284,7 +3346,12 @@ def get_interface_driver(if_name, cache=True):
         if driver:
             return driver
 
-        driver = get_ethtool_value(if_name, 'driver')
+        # The name of the driver bound to device is available in sysfs, so we
+        # don't need to spawn 'ethtool -i'. Virtual devices (bridges, taps, vlans, etc)
+        # have no bound device driver, so use 'ethtool' for them.
+        driver = fw_os_utils.sys_class_net_driver(if_name)
+        if not driver:
+            driver = get_ethtool_value(if_name, 'driver')
 
         interface.update({'driver': driver})
         return driver
@@ -4406,8 +4473,14 @@ def dict_deep_update(dst, src):
         else:
             dst[key] = value
 
-def get_linux_interface_mtu(if_name):
-    net_if_stats = psutil.net_if_stats()
+def get_linux_interface_mtu(if_name, net_if_stats=None):
+    """Returns MTU of Linux interface as string, or '' if interface was not found.
+
+    :param net_if_stats: output of psutil.net_if_stats(). If not provided,
+                         it is fetched by this function.
+    """
+    if net_if_stats is None:
+        net_if_stats = psutil.net_if_stats()
     if if_name not in net_if_stats:
         return ''
 

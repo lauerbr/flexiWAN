@@ -24,6 +24,7 @@ import os
 import shlex
 import stat
 import subprocess
+import threading
 import time
 
 class CalledProcessSigTerm(subprocess.CalledProcessError):
@@ -59,15 +60,43 @@ def kill_process(name, timeout=10):
             return True
     return False
 
+_VPP_PROCESS_NAMES = ('vpp_main', 'vpp')
+_vpp_pid_cache = None   # PID (string, as returned by pgrep) of the last found VPP process
+
+def _is_vpp_pid_alive(pid):
+    """Check that process 'pid' exists and it is still VPP (PIDs might be reused)."""
+    try:
+        os.kill(int(pid), 0)
+    except PermissionError:
+        pass        # process exists, but belongs to other user
+    except (OSError, ValueError, TypeError):
+        return False
+    try:
+        with open(f'/proc/{pid}/comm') as f:
+            return f.read().strip() in _VPP_PROCESS_NAMES
+    except OSError:
+        return False
+
 def vpp_pid():
     """Get pid of VPP process.
+    The PID found by 'pgrep' is cached. The cached value is validated by
+    os.kill(pid, 0) and /proc/<pid>/comm, so 'pgrep' is spawned only if VPP
+    was restarted or stopped.
 
     :returns:           process identifier.
     """
+    global _vpp_pid_cache
+    pid = _vpp_pid_cache
+    if pid and _is_vpp_pid_alive(pid):
+        return pid
+
+    _vpp_pid_cache = None
     pid = pid_of('vpp_main')
     if not pid:
         pid = pid_of('vpp')
 
+    if pid and pid.isdigit():   # don't cache multiple PIDs, if pgrep found few processes
+        _vpp_pid_cache = pid
     return pid
 
 def vpp_does_run():
@@ -76,6 +105,94 @@ def vpp_does_run():
     :returns:           Return 'True' if VPP is running.
     """
     return True if vpp_pid() else False
+
+class FwYamlFileCache:
+    """Cache of parsed yaml files. The parsed content of file is reused
+    as long as the file modification time, change time, size and inode
+    are not changed. It is thread safe.
+    IMPORTANT: the returned objects are shared, the caller must not modify them!
+    """
+    def __init__(self):
+        self.cache = {}   # file name -> (file signature, parsed yaml)
+        self.lock  = threading.Lock()
+
+    def load(self, fname):
+        import yaml     # import here to keep this module light for users that don't need yaml
+
+        st = os.stat(fname)
+        signature = (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino)
+        with self.lock:
+            cached = self.cache.get(fname)
+            if cached and cached[0] == signature:
+                return cached[1]
+        with open(fname, 'r') as stream:
+            content = yaml.safe_load(stream)
+        with self.lock:
+            self.cache[fname] = (signature, content)
+        return content
+
+    def forget_except(self, fnames):
+        """Removes from cache all files except the provided."""
+        with self.lock:
+            for fname in set(self.cache) - set(fnames):
+                del self.cache[fname]
+
+SYS_CLASS_NET = '/sys/class/net'
+
+def sys_class_net_lines():
+    """Returns list of '<name> -> <link target>' strings for entries of the
+    /sys/class/net folder, e.g.:
+        'enp0s3 -> ../../devices/pci0000:00/0000:00:03.0/net/enp0s3'
+    The strings are the same as the end of lines printed by 'ls -l /sys/class/net',
+    so they can be parsed in the same way, but without spawning shell processes.
+    Entries that are not symbolic links (e.g. bonding_masters) are represented by name only.
+    Raises OSError if /sys/class/net can't be read.
+    """
+    lines = []
+    for name in sorted(os.listdir(SYS_CLASS_NET)):
+        try:
+            lines.append(f'{name} -> {os.readlink(os.path.join(SYS_CLASS_NET, name))}')
+        except OSError:
+            lines.append(name)
+    return lines
+
+def sys_class_net_grep(pattern, exclude=None):
+    """Emulates 'ls -l /sys/class/net | grep -v <exclude> | grep <pattern>'
+    for fixed strings (not regular expressions).
+
+    :returns: list of matching lines (see sys_class_net_lines()), [] on no match or error.
+    """
+    try:
+        lines = sys_class_net_lines()
+    except OSError:
+        return []
+    return [l for l in lines if pattern in l and not (exclude and exclude in l)]
+
+def sys_class_net_read(if_name, attribute):
+    """Reads /sys/class/net/<if_name>/<attribute> file.
+
+    :returns: stripped content of the file or None if it can't be read,
+              e.g. if interface does not exist or it is down (carrier).
+    """
+    if not if_name or '/' in if_name or if_name in ('.', '..'):
+        return None
+    try:
+        with open(os.path.join(SYS_CLASS_NET, if_name, attribute)) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+def sys_class_net_driver(if_name):
+    """Returns name of the kernel driver bound to the interface device
+    (basename of /sys/class/net/<if_name>/device/driver link), or None if
+    the interface has no device driver, e.g. virtual interfaces.
+    """
+    if not if_name or '/' in if_name or if_name in ('.', '..'):
+        return None
+    try:
+        return os.path.basename(os.readlink(os.path.join(SYS_CLASS_NET, if_name, 'device', 'driver')))
+    except OSError:
+        return None
 
 def ensure_private_dir(path, mode=0o700):
     """Create directory if needed and ensure it is owned by the effective user

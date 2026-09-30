@@ -1070,6 +1070,7 @@ class FWROUTER_API(FwCfgRequestHandler):
                         self.log.debug("call: %s: %s" % (cmd, str(e)))
 
         finally:
+            fwutils.clear_vpp_if_name_negative_cache()   # VPP interfaces might be added/removed
             self.unset_request_logger()
         return reply
 
@@ -1912,6 +1913,7 @@ class FWROUTER_API(FwCfgRequestHandler):
         self.state_change(FwRouterState.STOPPED)
         fwglobals.g.cache.dev_id_to_vpp_tap_name.clear()
         fwglobals.g.cache.dev_id_to_vpp_if_name.clear()
+        fwutils.clear_vpp_if_name_negative_cache()
         fwutils.clear_linux_interfaces_cache()
         self._clear_monitor_interfaces()
 

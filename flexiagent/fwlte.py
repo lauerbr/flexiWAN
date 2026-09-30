@@ -197,13 +197,11 @@ class FwLinuxModem(FwObject):
             device_path =  modem_obj.get('generic', {}).get('device', '') # -> "/sys/devices/pci0000:00/0000:00:15.0/usb1/1-1"
             device_path = device_path.replace('/sys', '')
             linux_if = fwutils.dev_id_to_linux_if(self.dev_id)
-            try:
-                subprocess.check_call(f'ls -l /sys/class/net/ | grep {linux_if} | grep "{device_path}"', shell=True)
+            lines = fw_os_utils.sys_class_net_grep(str(linux_if))
+            if [l for l in lines if device_path in l]:
                 modem_info = modem_obj
                 break
-            except subprocess.CalledProcessError:
-                # 'grep' returns failure on no match!
-                self.log.debug(f'failed to find a modem: device {device_path}, port {primary_port}, interface {linux_if}')
+            self.log.debug(f'failed to find a modem: device {device_path}, port {primary_port}, interface {linux_if}')
 
         if not modem_info:
             raise Exception(f"modem {self.usb_device} not found in modem list: {modem_list}")
@@ -2137,7 +2135,7 @@ def dump(lte_if_name, prefix_path=''):
 
 def get_if_names_by_dev_ids(allow_qmi=False):
     out = {}
-    lines = subprocess.check_output('sudo ls -l /sys/class/net', shell=True).decode().splitlines()
+    lines = fw_os_utils.sys_class_net_lines()
     for line in lines:
         nicname = line.split('/')[-1]
         driver = fwutils.get_interface_driver(nicname, cache=False)
