@@ -19,7 +19,6 @@
 ################################################################################
 
 import glob
-import psutil
 import os
 import time
 import subprocess
@@ -386,15 +385,12 @@ def is_wifi_interface(if_name):
 
     :returns: Boolean.
     """
-    try:
-        lines = subprocess.check_output('iwconfig | grep %s' % if_name, shell=True, stderr=subprocess.STDOUT).decode().splitlines()
-        for line in lines:
-            if if_name in line and not 'no wireless extensions' in line:
-                return True
-    except Exception:
+    # 'iwconfig' reports "no wireless extensions" for interfaces that have
+    # no /sys/class/net/<if_name>/wireless folder, so check the folder directly
+    # instead of spawning 'iwconfig' for every interface.
+    if not if_name or '/' in if_name or if_name in ('.', '..'):
         return False
-
-    return False
+    return os.path.isdir(os.path.join(fw_os_utils.SYS_CLASS_NET, if_name, 'wireless'))
 
 def get_wifi_interfaces_dev_ids():
     out = {}

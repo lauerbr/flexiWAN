@@ -28,8 +28,6 @@ import fwpppoe
 import fwutils
 import fwwifi
 import fw_nat_command_helpers
-import fwqos
-import fwtranslate_add_tunnel
 
 # add_interface
 # --------------------------------------

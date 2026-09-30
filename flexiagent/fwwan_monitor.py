@@ -21,10 +21,8 @@
 ################################################################################
 
 import copy
-import re
 import time
 
-from urllib import parse as uparse
 
 import subprocess
 
@@ -172,21 +170,46 @@ class FwWanMonitorRoute(fwroutes.FwRoute):
             fwutils.vpp_cli_execute([vppctl_cmd])
 
     def check_connectivity(self):
+        self.finish_probe(self.start_probe())
+
+    def start_probe(self):
+        """Starts connectivity probe - the 'fping' process - to the next server.
+        The probe result is collected by finish_probe(). Splitting the probe into
+        two steps enables running probes for all routes simultaneously.
+
+        :returns: the probe context to be provided to finish_probe().
+        """
         server_address = self.get_next_server()
-        timestamp      = time.time()
+        probe = {'server': server_address, 'timestamp': time.time(), 'process': None, 'output': ''}
         # The server and timeout come from the link monitor configuration,
         # so run fping without shell and validate them to avoid injection.
-        output = ''
         if fw_input_validation.is_valid_ping_host(server_address) and \
            fw_input_validation.is_valid_int(self.probe_timeout, 0):
             cmd = ['fping', server_address, '-C', '1', '-q', '-R', '-I', str(self.dev), '-t', str(self.probe_timeout)]
             try:
-                output = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        universal_newlines=True, timeout=60).stdout
+                probe['process'] = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        universal_newlines=True)
             except Exception as e:
-                output = str(e)
+                probe['output'] = str(e)
         else:
             self.log.debug(f"WAN Monitor: invalid server {server_address!r} or timeout {self.probe_timeout!r}")
+        return probe
+
+    def finish_probe(self, probe):
+        """Waits for the probe started by start_probe() to finish and updates
+        connectivity status and route metric according to the probe result.
+        """
+        server_address = probe['server']
+        timestamp      = probe['timestamp']
+        output         = probe['output']
+        process        = probe['process']
+        if process:
+            try:
+                output, _ = process.communicate(timeout=60)
+            except Exception as e:
+                process.kill()
+                process.communicate()
+                output = str(e)
 
         new_rtt = 0.0
         rows = output.strip().splitlines()
@@ -339,7 +362,6 @@ class FwWanMonitor(FwObject):
 
         self.routes = fwglobals.g.cache.wan_monitor['enabled_routes']
         self.disabled_routes = fwglobals.g.cache.wan_monitor['disabled_routes']
-        self.route_rule_re   = re.compile(r"(\w+) via ([0-9.]+) dev (\w+)(.*)") #  'default via 20.20.20.22 dev enp0s9 proto dhcp metric 100'
         self.thread_wan_monitor = None
 
     def __enter__(self):
@@ -381,13 +403,32 @@ class FwWanMonitor(FwObject):
 
     def _wan_monitor_thread_func(self, ticks):
         routes = self._get_routes()
+
+        # Start probes on all routes simultaneously and then collect results,
+        # so the pass takes time of the slowest probe and not the sum of all probes.
+        #
+        probes = []
         for r in routes:
             if r.stale:  # the route does not present in OS currently
                 continue
             modem = fwglobals.g.modems.get(r.dev_id, raise_exception_on_not_found=False)
             if modem and modem.is_resetting():
                 continue
-            r.check_connectivity()
+            probes.append((r, r.start_probe()))
+
+        try:
+            for r, probe in probes:
+                r.finish_probe(probe)
+        finally:
+            # If finish_probe() raised exception, ensure no fping process is left behind
+            for _, probe in probes:
+                process = probe['process']
+                if process and process.returncode is None:
+                    try:
+                        process.kill()
+                        process.communicate()
+                    except Exception:
+                        pass
 
     def check_internet(self, use_default_threshold=True, device_id=None, time_window=None, min_probes=None):
         '''Checks if internet is reachable and works. Just checks that there are default routes

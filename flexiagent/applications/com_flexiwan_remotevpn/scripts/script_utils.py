@@ -83,12 +83,6 @@ def remove_tc_commands(vpn_tun_is_up):
     except:
         pass
 
-def get_saved_vpp_interface_name():
-    with open(app_database_file, 'r') as json_file:
-        data = json.load(json_file)
-        tun_vpp_if_name = data.get('tun_vpp_if_name')
-        return tun_vpp_if_name
-
 def create_tun_in_vpp(addr):
     out = None
     try:

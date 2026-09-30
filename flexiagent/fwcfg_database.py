@@ -152,9 +152,11 @@ class FwCfgDatabase(FwSqliteDict):
 
         :returns: the tuple of the command list and the 'executed' flag
         """
-        if not req_key in self:
+        try:
+            entry = self[req_key]   # fetch and unpickle the entry once
+        except KeyError:
             return (None, None)
-        return (self[req_key].get('cmd_list'), self[req_key].get('executed'))
+        return (entry.get('cmd_list'), entry.get('executed'))
 
     def exists(self, request):
         """Check if entry exists in DB.
@@ -175,9 +177,10 @@ class FwCfgDatabase(FwSqliteDict):
         :param request: The configuration request, e.g. modify-interface.
         :returns: parameters of the request stored in the database.
         """
-        if req_key in self:
+        try:
             return self[req_key].get('params')
-        return None
+        except KeyError:
+            return None
 
     def dump(self, types, escape=None, full=False, keys=False):
         """Dumps database configuration into list of requests that look exactly
@@ -207,16 +210,17 @@ class FwCfgDatabase(FwSqliteDict):
         for req in types:
             for key in db_keys:
                 if re.match(req, key):
+                    entry = self[key]   # fetch and unpickle the entry once
                     request = {
-                        'message': self[key].get('request',""),
-                        'params':  self[key].get('params', "")
+                        'message': entry.get('request',""),
+                        'params':  entry.get('params', "")
                     }
                     if request['params'] == None:  # flexiManage team doesn't like None :)
                         request['params'] = {}
                     if full:
                         request.update({
-                            'cmd_list': self[key].get('cmd_list', ""),
-                            'executed': self[key].get('executed', "")})
+                            'cmd_list': entry.get('cmd_list', ""),
+                            'executed': entry.get('executed', "")})
                     if keys:
                         request.update({'key': key})
                     cfg.append(request)
@@ -329,17 +333,15 @@ class FwCfgDatabase(FwSqliteDict):
                     #
                     del input_requests[dumped_key]
                 else:
-                    dumped_request['message'] = dumped_request['message'].replace('add-', 'remove-')
-                    output_requests.append(dumped_request)
+                    self._sync_list_add_modification(dumped_request, input_requests[dumped_key], output_requests)
             else:
                 # The configuration item does not present in the input list.
                 # So it stands for item to be removed. Add correspondent request
                 # to the output list.
-                # Ignore 'start-router', 'stop-router', etc as they are not
-                # an configuration items.
                 #
-                dumped_request['message'] = dumped_request['message'].replace('add-', 'remove-')
-                output_requests.append(dumped_request)
+                if self._sync_list_is_removable(dumped_request):
+                    dumped_request['message'] = dumped_request['message'].replace('add-', 'remove-')
+                    output_requests.append(dumped_request)
 
 
         # At this point the input list includes 'add-X' requests that stand
@@ -349,3 +351,24 @@ class FwCfgDatabase(FwSqliteDict):
         output_requests += list(input_requests.values())
 
         return output_requests
+
+    def _sync_list_add_modification(self, dumped_request, input_request, output_requests):
+        """Handles configuration item that presents both in the database and
+        in the sync list, but has different parameters. Used by get_sync_list().
+        By default the item is removed and than is added again - the 'remove-X'
+        request is added to the output list, and the 'add-X' request is kept in
+        the input list, which is appended to the output list at the end.
+
+        :param dumped_request:  the request dumped from database ('add-X')
+        :param input_request:   the correspondent request from the sync list ('add-X').
+                                It can be modified in place.
+        :param output_requests: the output sync list
+        """
+        dumped_request['message'] = dumped_request['message'].replace('add-', 'remove-')
+        output_requests.append(dumped_request)
+
+    def _sync_list_is_removable(self, dumped_request):
+        """Returns True if configuration item that presents in the database,
+        but does not present in the sync list, should be removed. Used by get_sync_list().
+        """
+        return True

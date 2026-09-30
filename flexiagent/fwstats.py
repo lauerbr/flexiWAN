@@ -36,14 +36,11 @@ import math
 import time
 import os
 import psutil
-import re
-import subprocess
 import sys
 import yaml
 
 import fw_os_utils
 import fwglobals
-import fwlte
 import fwthread
 import fwutils
 import fwwifi
@@ -213,7 +210,7 @@ class FwStatistics(FwObject):
                                     t_stats.update(calc_stats)
                             else:
                                 # For other interfaces try to get interface id
-                                dev_id = fwutils.vpp_if_name_to_dev_id(iface)
+                                dev_id = fwutils.vpp_if_name_to_dev_id(iface, use_negative_cache=True)
                                 if dev_id:
                                     if_bytes[dev_id] = calc_stats
 
@@ -230,7 +227,7 @@ class FwStatistics(FwObject):
             self.stats['lte_stats'] = prev_stats['lte_stats']
             self.stats['wifi_stats'] = prev_stats['wifi_stats']
 
-        if len(self.updates_list) is UPDATE_LIST_MAX_SIZE:
+        if len(self.updates_list) >= UPDATE_LIST_MAX_SIZE:
             self.updates_list.pop(0)
 
         stats = dict(self.stats)

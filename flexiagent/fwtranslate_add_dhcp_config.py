@@ -20,10 +20,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 
-import os
 
-import fwutils
-import fwglobals
 
 def add_dhcp_config(params):
     """Generate commands to add DHCP configuration.

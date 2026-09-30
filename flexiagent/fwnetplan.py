@@ -28,6 +28,7 @@ import shutil
 import time
 import yaml
 
+import fw_os_utils
 import fwglobals
 import fwlte
 import fwutils
@@ -702,14 +703,17 @@ def add_remove_netplan_interface(is_add, dev_id, ip, gw, metric, dhcp, type, dns
 
     return (True, None)
 
+_netplan_yaml_cache = fw_os_utils.FwYamlFileCache()
+
 def is_interface_dhcp(if_name):
     files = glob.glob("/etc/netplan/*.yaml") + \
             glob.glob("/lib/netplan/*.yaml") + \
             glob.glob("/run/netplan/*.yaml")
 
+    _netplan_yaml_cache.forget_except(files)   # forget removed files
+
     for fname in files:
-        with open(fname, 'r') as stream:
-            config = yaml.safe_load(stream)
+        config = _netplan_yaml_cache.load(fname)   # IMPORTANT: don't modify the returned object!
 
         if config is None:
             continue
@@ -819,6 +823,7 @@ def _update_cache(is_add, dev_id, ifname):
         if vpp_if_name:
             del fwglobals.g.cache.dev_id_to_vpp_if_name[dev_id_full]
             del fwglobals.g.cache.vpp_if_name_to_dev_id[vpp_if_name]
+    fwutils.clear_vpp_if_name_negative_cache()
 
     # Remove dev-id-to-tap cached value for this dev id, as netplan might change
     # interface name (see 'set-name' netplan option).

@@ -26,13 +26,10 @@ import json
 from os.path import exists
 import requests
 from requests.models import PreparedRequest
-import urllib.request
-import tempfile
 import shutil
 import re
 import subprocess
 import time
-import concurrent.futures
 
 current_dir = os.path.dirname(os.path.realpath(__file__))
 applications_dir = os.path.join(current_dir, "../")
@@ -513,8 +510,7 @@ class Application(FwApplicationInterface):
             # Some responses (such as in password change) has some text before the real response
             parsed = json.loads(resp.text.splitlines()[-1])
             return (parsed['rsp'], None)
-        except Exception as e:
-            # self.log.error(f"Error executing NTOPNG request {str(e)}")
+        except Exception:
             return ({}, "Exec Request Error")
 
     def exec_application_action(self, **params):

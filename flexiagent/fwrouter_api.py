@@ -26,12 +26,11 @@ import json
 import os
 import re
 import subprocess
-import threading
 import time
 import traceback
 
 from datetime import datetime
-from netaddr import IPAddress, IPNetwork
+from netaddr import IPNetwork
 
 import fwtranslate_add_firewall_policy
 import fwfirewall
@@ -39,7 +38,6 @@ import fw_nat_command_helpers
 import fw_vpp_coredump_utils
 import fw_input_validation
 import fwglobals
-import fwlte
 import fwnetplan
 import fw_os_utils
 import fwpppoe
@@ -48,16 +46,13 @@ import fwroutes
 import fwthread
 import fwtunnel_stats
 import fwutils
-import fwwifi
 import fwqos
 from fwcfg_request_handler import FwCfgRequestHandler
 from fwfrr import FwFrr
 from fwikev2 import FwIKEv2
 from fwmultilink import FwMultilink
-from fwpolicies import FwPolicies
 from fwroutes import FwLinuxRoutes
 from vpp_api import VPP_API
-from tools.common.fw_vpp_startupconf import FwStartupConf
 from fwcfg_request_handler import FwCfgMultiOpsWithRevert
 
 fwrouter_translators = {
@@ -713,7 +708,6 @@ class FWROUTER_API(FwCfgRequestHandler):
                fwpppoe.is_pppoe_interface(dev_id=dev_id)):
                 continue
             tap_name = fwutils.dev_id_to_tap(dev_id)
-            is_lte = fwlte.is_lte_interface_by_dev_id(dev_id)
             if interface.get('deviceType') == 'lte':
                 modem = fwglobals.g.modems.get(dev_id)
                 if modem.is_connecting_or_resetting():
@@ -1072,6 +1066,7 @@ class FWROUTER_API(FwCfgRequestHandler):
                         self.log.debug("call: %s: %s" % (cmd, str(e)))
 
         finally:
+            fwutils.clear_vpp_if_name_negative_cache()   # VPP interfaces might be added/removed
             self.unset_request_logger()
         return reply
 
@@ -1906,7 +1901,6 @@ class FWROUTER_API(FwCfgRequestHandler):
         """Handles post-VPP stop activities.
         :returns: None.
         """
-        self.router_stopping = False
 
         # keep LTE connectivity on linux interface
         fwglobals.g.system_api.restore_configuration(types=['add-lte'])
@@ -1914,6 +1908,7 @@ class FWROUTER_API(FwCfgRequestHandler):
         self.state_change(FwRouterState.STOPPED)
         fwglobals.g.cache.dev_id_to_vpp_tap_name.clear()
         fwglobals.g.cache.dev_id_to_vpp_if_name.clear()
+        fwutils.clear_vpp_if_name_negative_cache()
         fwutils.clear_linux_interfaces_cache()
         self._clear_monitor_interfaces()
 
@@ -2104,7 +2099,6 @@ class FWROUTER_API(FwCfgRequestHandler):
         for msg in self.pending_cfg_db.dump():
             self.cfg_db.update(msg)
         self.pending_cfg_db.clean()
-        self.pending_interfaces = {}
 
         # Now fetch configuration items from database and configure them one by one.
         #

@@ -46,7 +46,8 @@ def dpdk_devbind_signal_handler(signum, frame):
        will not cause the backtrace to print.
 	"""
     exit(1)
-signal.signal(signal.SIGINT, dpdk_devbind_signal_handler)
+if __name__ == "__main__":  # don't override signal handlers of the importing process
+    signal.signal(signal.SIGINT, dpdk_devbind_signal_handler)
 
 import sys
 import os

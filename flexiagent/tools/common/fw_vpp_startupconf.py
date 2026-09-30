@@ -18,8 +18,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 
-import os
-import shutil
 import json
 import re
 import sys
@@ -322,7 +320,6 @@ class FwStartupConfParsed:
 
 	def __str__(self):
 		return json.dumps(self.listOfList[0],sort_keys=True,indent=2, separators=("",""))
-		#return repr(self.listOfList[0])
 
 	def create_element(self, str):
 		"""
@@ -363,23 +360,6 @@ class FwStartupConfParsed:
 			if element[0] is not None and element[0].startswith(search_str):
 				return element[0]
 		return None
-
-	def add_element_after(self, lst, element, new_element):
-		"""
-		API.
-		When order of elements in list is important, this function adds a new element after an existing element.
-
-		:param lst:         The list to add the new element to
-		:param element:     The element that new_element should be inserted after
-		:param new_element: The new element to add
-		"""
-		try:
-			idx = lst.index(element)
-		except ValueError:
-			return False
-		else:
-			lst.insert(idx+1, new_element)
-			return True
 
 	def get_tuple_from_key(self, lst, key):
 		"""

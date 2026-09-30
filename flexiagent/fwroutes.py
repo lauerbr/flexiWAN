@@ -33,8 +33,9 @@ import fwutils
 
 from fwcfg_request_handler import FwCfgMultiOpsWithRevert
 from fwobject import FwObject
-from pyroute2 import IPRoute
-from pyroute2.netlink.exceptions import NetlinkError
+
+# The pyroute2 is imported on demand, as it takes ~100 msec to import it,
+# and most of 'fwagent' CLI commands don't need it.
 
 routes_protocol_map = {
     -1: '',
@@ -114,6 +115,7 @@ class FwRoute(FwObject):
         return err_str
 
     def _uninstall(self):
+        from pyroute2 import IPRoute
         try:
             with IPRoute() as ipr:
                 ipr.route("del", dst=self.prefix, priority=self.metric)
@@ -354,7 +356,7 @@ class FwRoutes(FwObject):
         # which should happen if interface address is modified by user on
         # flexiManage UI.
         #
-        if fwglobals.g.fwagent:
+        if fwglobals.g.fwagent and ticks % 2 == 0:   # every ~2 seconds, it spawns 'ip route'
             self._check_reconnect_on_default_route_change()
 
     def _check_reinstall_static_routes(self):
@@ -467,6 +469,9 @@ class FwLinuxRoutes(dict):
         return self
 
     def _linux_get_routes(self, prefix=None, preference=None, via=None, proto=None):
+        from pyroute2 import IPRoute
+        from pyroute2.netlink.exceptions import NetlinkError
+
         if not proto:
             proto_id = None
         else:
@@ -484,6 +489,22 @@ class FwLinuxRoutes(dict):
             except NetlinkError:
                 routes = []     # If no matching route exists in kernel, NetlinkError is raised
 
+            # Map interface index into interface name. The links are dumped once
+            # on demand for all routes, as dumping them per route is expensive,
+            # when there are many routes, e.g. received by BGP.
+            #
+            link_names = None
+            def _get_link_name(index):
+                nonlocal link_names
+                if link_names is None:
+                    link_names = {}
+                    try:
+                        for link in ipr.get_links():
+                            link_names[link['index']] = link.get_attr('IFLA_IFNAME')
+                    except NetlinkError:
+                        pass
+                return link_names.get(index)
+
             for route in routes:
                 nexthops = []
                 dst = None # Default routes have no RTA_DST
@@ -497,20 +518,20 @@ class FwLinuxRoutes(dict):
                     if attr[0] == 'RTA_PRIORITY':
                         metric = int(attr[1])
                     if attr[0] == 'RTA_OIF':
-                        try:
-                            dev = ipr.get_links(attr[1])[0].get_attr('IFLA_IFNAME')
-                        except NetlinkError as e:
+                        if_name = _get_link_name(attr[1])
+                        if if_name is None:
                             continue
+                        dev = if_name
                     if attr[0] == 'RTA_DST':
                         dst = attr[1]
                     if attr[0] == 'RTA_GATEWAY':
                         gw = attr[1]
                     if attr[0] == 'RTA_MULTIPATH':
                         for elem in attr[1]:
-                            try:
-                                dev = ipr.get_links(elem['oif'])[0].get_attr('IFLA_IFNAME')
-                            except NetlinkError as e:
+                            if_name = _get_link_name(elem['oif'])
+                            if if_name is None:
                                 continue
+                            dev = if_name
                             for attr2 in elem['attrs']:
                                 if attr2[0] == 'RTA_GATEWAY':
                                     nexthops.append(FwRouteNextHop(attr2[1],dev))

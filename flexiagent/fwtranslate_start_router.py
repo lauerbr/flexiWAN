@@ -20,12 +20,8 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 
-import os
-import re
 
-import fwnetplan
 import fwglobals
-import fwikev2
 import fwutils
 import fwlte
 import fw_nat_command_helpers

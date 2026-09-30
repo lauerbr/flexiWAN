@@ -93,6 +93,5 @@ class OS_API:
 
                 if api_defs['decode'] != None:
                     (result, ok) = getattr(self.decoders, api_defs['decode'])(result)
-                #print('OS API %s, Result: %s' % (req, str(result)))
                 reply = {'entity':'osReply', 'message':result, 'ok':ok}
         return reply

@@ -31,8 +31,6 @@ def add_lte(params):
 
     dev_id                = params.get('dev_id')
     metric                = params.get('metric')
-    primary_slot          = params.get('primarySlot')
-    is_switchover_enabled = params.get('automaticSwitchover', False)
 
     cmd = {}
     cmd['cmd'] = {}

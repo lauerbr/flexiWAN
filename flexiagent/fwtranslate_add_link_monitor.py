@@ -20,7 +20,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 import fw_input_validation
-import fwglobals
 import fwutils
 
 # {

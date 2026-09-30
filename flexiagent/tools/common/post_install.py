@@ -49,7 +49,7 @@ import re
 globals = os.path.join(os.path.dirname(os.path.realpath(__file__)) , '..' , '..')
 sys.path.append(globals)
 
-import fwutils
+import fwutils             # noqa: F401 - must be imported before fwapplications_api to resolve circular imports
 import fwapplications_api
 
 FW_EXIT_CODE_OK      = 0

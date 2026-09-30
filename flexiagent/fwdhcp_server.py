@@ -32,7 +32,6 @@ import tempfile
 from netaddr import IPNetwork
 
 import fwglobals
-import fwutils
 
 from fwobject import FwObject
 

@@ -24,7 +24,6 @@ import subprocess
 import time
 
 from netaddr import IPNetwork
-from sqlitedict import SqliteDict
 
 from typing import Dict
 
@@ -291,6 +290,7 @@ class FwPppoeConnection():
             del fwglobals.g.cache.dev_id_to_vpp_if_name[self.dev_id]
         if self.tun_vpp_if_name in fwglobals.g.cache.vpp_if_name_to_dev_id:
             del fwglobals.g.cache.vpp_if_name_to_dev_id[self.tun_vpp_if_name]
+        fwutils.clear_vpp_if_name_negative_cache()
         self._cache_if_names_remove(
             {self.tun_if_name, self.tun_vpp_if_name,  self.tun_vppsb_if_name, self.if_name},
             vpp_if_name=self.tun_vpp_if_name)
@@ -595,10 +595,6 @@ class FwPppoeClient(FwObject):
     def _add_user(self, name, password):
         self.chap_config.add_user(name, password)
         self.pap_config.add_user(name, password)
-
-    def _remove_user(self, name):
-        self.chap_config.remove_user(name)
-        self.pap_config.remove_user(name)
 
     def _serialize_users_connections(self):
         """Create secrets and connections configuration files.

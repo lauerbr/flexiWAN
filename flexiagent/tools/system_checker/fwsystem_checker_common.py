@@ -25,14 +25,12 @@ import json
 import os
 import psutil
 import re
-import ruamel.yaml
 import subprocess
 import sys
 import uuid
 import yaml
 import shutil
 import stat
-import time
 
 common_tools = os.path.join(os.path.dirname(os.path.realpath(__file__)) , '..' , 'common')
 sys.path.append(common_tools)
@@ -52,11 +50,6 @@ from fwlte import FwModemManager
 from fwsystem_checker import TXT_COLOR
 
 from yaml.constructor import ConstructorError
-
-try:
-    from yaml import CLoader as Loader
-except ImportError:
-    from yaml import Loader
 
 
 def no_duplicates_constructor(loader, node, deep=False):
@@ -332,6 +325,7 @@ class Checker:
                 choice = input(prompt + "use %s ? [Y/n]: " % new_uuid)
                 if choice != 'y' and choice != 'Y' and choice != '':
                     return False
+            import ruamel.yaml  # imported on demand as it is used here only
             f = open(self.CFG_AGENT_CONF_FILE, 'r')
             ruamel_yaml = ruamel.yaml.YAML()
             conf = ruamel_yaml.load(f)
@@ -367,7 +361,7 @@ class Checker:
                 while True:
                     ip = input(prompt + "please enter GW address, e.g. 192.168.1.1: ")
                     try:
-                        out = subprocess.check_output('ip route add default via %s' % ip, shell=True).decode().strip()
+                        subprocess.check_output('ip route add default via %s' % ip, shell=True)
                         return True
                     except Exception as e:
                         self.log.error(prompt + str(e))
@@ -568,7 +562,6 @@ class Checker:
         except Exception as e:
             self.log.error(prompt + str(e))
             return False
-        return True
 
     def soft_check_multiple_interface_definitions(self, fix=False, silently=False, prompt=''):
         """Check if interface is defined in multiple Netplan files.
@@ -592,7 +585,6 @@ class Checker:
         except Exception as e:
             self.log.error(prompt + str(e))
             return False
-        return True
 
 
     def soft_check_hostname_syntax(self, fix=False, silently=False, prompt=''):

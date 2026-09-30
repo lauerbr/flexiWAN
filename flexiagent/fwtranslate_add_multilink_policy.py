@@ -113,13 +113,6 @@ def _generate_policy_id():
     policy_index = _generate_id(policy_index)
     return copy.deepcopy(policy_index)
 
-def reset_policy_id():
-    """Reset policy identifier.
-    """
-    global policy_index
-    policy_index = 0
-
-
 def add_multilink_policy(params):
     """Translates the received from flexiManage 'add-multilink-policy' request
     into list of commands to be executed in order to configure policy in VPP.

@@ -19,9 +19,8 @@
 ################################################################################
 
 import copy
-import time
-from netaddr import *
-from subprocess import Popen, PIPE, STDOUT, DEVNULL
+from netaddr import IPNetwork
+from subprocess import Popen, PIPE, DEVNULL
 import fw_input_validation
 import fwglobals
 import fwutils
@@ -38,6 +37,35 @@ APPROX_FACTOR = 16
 HYSTERESIS_LOSS = 1
 HYSTERESIS_DELAY = 30
 PING_HOST_NUM = 200
+
+def _stop_fping_process(process):
+    """Kills fping process if it still runs and releases its resources."""
+    try:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=1)
+    except Exception:
+        pass
+
+def _prune_fping_processes(active_ids):
+    """Stops and removes fping processes that belong to tunnels that are not
+    monitored anymore, e.g. removed tunnels. Without that the 'fping_processes'
+    dictionary grows forever.
+    """
+    for process_id in list(fping_processes.keys()):
+        if process_id not in active_ids:
+            _stop_fping_process(fping_processes.pop(process_id))
+
+def _copy_stats_entry(entry):
+    """Returns copy of tunnel statistics entry, that can be safely modified
+    by tunnel_stats_test() without lock. Only the fields that are modified
+    by tunnel_stats_test() are copied, the rest are shared with the original.
+    It is much cheaper than copy.deepcopy() of the whole entry.
+    """
+    entry_copy = dict(entry)
+    if 'drops' in entry_copy:
+        entry_copy['drops'] = copy.copy(entry_copy['drops'])   # SlidingWindow is modified in place
+    return entry_copy
 
 def start_fping_process(cmd):
     """Execute a simple external command and get its output.
@@ -176,11 +204,13 @@ def tunnel_stats_test():
     :returns: None.
     """
     if not tunnel_stats_global:
+        if fping_processes:
+            _prune_fping_processes(set())
         return
 
     tunnel_stats_global_copy = {}
     with tunnel_stats_global_lock:
-        tunnel_stats_global_copy = copy.deepcopy(tunnel_stats_global)
+        tunnel_stats_global_copy = { tunnel_id: _copy_stats_entry(entry) for tunnel_id, entry in tunnel_stats_global.items() }
 
     peers = []
     tunnels = {}
@@ -199,6 +229,16 @@ def tunnel_stats_test():
             hosts = " ".join(tunnel_stats_entry.get('hosts_to_ping'))
             if hosts:
                 tunnels[hosts] = tunnel_id
+
+    # Remove fping processes of tunnels that are not monitored anymore.
+    # Note fping processes of tunnels without peers are identified by id of
+    # the first tunnel in the batch of PING_HOST_NUM tunnels.
+    #
+    active_ids = set([p['tunnel_id'] for p in peers if p.get('hosts_to_ping')])
+    tunnels_keys = list(tunnels.keys())
+    for i in range(0, len(tunnels_keys), PING_HOST_NUM):
+        active_ids.add(tunnels[tunnels_keys[i]])
+    _prune_fping_processes(active_ids)
 
     tunnel_rtt = peer_stats_get_ping_time(peers)
     tunnel_rtt.update(tunnel_stats_get_ping_time(tunnels))
@@ -261,25 +301,24 @@ def tunnel_stats_get():
     :returns: dictionary of tunnel statistics.
     """
     tunnel_stats = {}
-    cur_time = time.time()
-    tunnel_stats_global_copy = {}
 
+    # Only scalar values are read out of the global statistics, so there is
+    # no need to deep copy them. Just read them under lock.
+    #
     with tunnel_stats_global_lock:
-        tunnel_stats_global_copy = copy.deepcopy(tunnel_stats_global)
+        for tunnel_id, stats in tunnel_stats_global.items():
+            tunnel_stats[tunnel_id] = {}
+            tunnel_stats[tunnel_id]['rtt'] = stats.get('rtt')
+            tunnel_stats[tunnel_id]['drop_rate'] = stats.get('drop_rate')
 
-    for tunnel_id, stats in tunnel_stats_global_copy.items():
-        tunnel_stats[tunnel_id] = {}
-        tunnel_stats[tunnel_id]['rtt'] = stats.get('rtt')
-        tunnel_stats[tunnel_id]['drop_rate'] = stats.get('drop_rate')
+            status = stats.get('status')
+            tunnel_stats[tunnel_id]['status'] = status if status else 'down'
 
-        status = stats.get('status')
-        tunnel_stats[tunnel_id]['status'] = status if status else 'down'
-
-        if tunnel_stats[tunnel_id]['rtt'] and tunnel_stats[tunnel_id]['rtt'] > 0:
-            if ((stats['subsequent_drops'] > TIMEOUT)):
-                tunnel_stats[tunnel_id]['status'] = 'down'
-            else:
-                tunnel_stats[tunnel_id]['status'] = 'up'
+            if tunnel_stats[tunnel_id]['rtt'] and tunnel_stats[tunnel_id]['rtt'] > 0:
+                if ((stats['subsequent_drops'] > TIMEOUT)):
+                    tunnel_stats[tunnel_id]['status'] = 'down'
+                else:
+                    tunnel_stats[tunnel_id]['status'] = 'up'
 
     return tunnel_stats
 

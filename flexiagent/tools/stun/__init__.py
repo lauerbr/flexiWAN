@@ -2,9 +2,7 @@ import binascii
 import random
 import socket
 import os
-import errno
 import sys
-import traceback
 globals = os.path.join(os.path.dirname(os.path.realpath(__file__)) , '..' , '..')
 sys.path.append(globals)
 

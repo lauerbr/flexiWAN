@@ -441,7 +441,6 @@ class Fwglobals(FwObject):
         self.POLICY_REC_DB_FILE  = self.DATA_PATH + '.policy.sqlite'
         self.MULTILINK_DB_FILE   = self.DATA_PATH + '.multilink.sqlite'
         self.FIREWALL_DB_FILE    = self.DATA_PATH + '.firewall.sqlite'
-        self.FQDN_RESOLVER       = self.DATA_PATH + '.fqdn_resolver.sqlite'
         self.DATA_DB_FILE        = self.DATA_PATH + '.data.sqlite'
         self.TRAFFIC_ID_DB_FILE  = self.DATA_PATH + '.traffic_identification.sqlite'
         self.QOS_DB_FILE         = self.DATA_PATH + '.qos.sqlite'
@@ -463,8 +462,6 @@ class Fwglobals(FwObject):
         self.router_api = None
         self.statistics = None
         self.cache   = self.FwCache()
-        self.WAN_FAILOVER_WND_SIZE         = 20         # 20 pings, every ping waits a second for response
-        self.WAN_FAILOVER_THRESHOLD        = 12         # 60% of pings lost - enter the bad state, 60% of pings are OK - restore to good state
         self.WAN_FAILOVER_METRIC_WATERMARK = 2000000000 # Bad routes will have metric above 2000000000
         self.DEVICE_LOGICAL_INTERFACE     =  16383 # Last in the range used for device logical interface configuration
         self.LOOPBACK_ID_LAN_NAT          =  16382 # Last before used for LAN NAT loopback interface configuration
@@ -555,14 +552,6 @@ class Fwglobals(FwObject):
         # Print loaded configuration into log
         if self.cfg.DEBUG:
             self.log.debug("Fwglobals configuration: " + self.__str__(), to_terminal=False)
-            # for a in dir(self.cfg):
-            #     val = getattr(self, a)
-            #     if isinstance(val, (int, float, str, unicode)):
-            #         log.debug("  %s: %s" % (a, str(val)), to_terminal=False)
-            # for a in dir(self):
-            #     val = getattr(self, a)
-            #     if isinstance(val, (int, float, str, unicode)):
-            #         log.debug("  %s: %s" % (a, str(val)), to_terminal=False)
 
     def load_debug_configuration_from_file(self, debug_conf_file):
         """Load debug configuration from YAML file.

@@ -96,7 +96,7 @@ class FwThread(threading.Thread):
     def _call_user_func(self, ticks, args, kwargs):
         try:    # 'try' prevents thread to exit on exception
             self.func(ticks, *args, **kwargs)
-        except CalledProcessSigTerm as e:
+        except CalledProcessSigTerm:
             self.log_debug("got SIGTERM")
         except Exception as e:
             self.log_error(f"{e} ({traceback.format_exc()})")
@@ -110,7 +110,7 @@ class FwThread(threading.Thread):
         while not fwglobals.g.router_threads.teardown and not self.stop_called:
             time.sleep(1)
             ticks += 1
-            with FwProfiler(self.name, ticks, self.log) as profiler:
+            with FwProfiler(self.name, ticks, self.log):
                 self._call_user_func(ticks, args, kwargs)
 
     def run(self):
@@ -179,7 +179,7 @@ class FwRouterThread(FwThread):
             rt.thread_names.append(self.getName())
             rt.request_cond_var.release()
 
-            with FwProfiler(self.name, ticks, self.log) as profiler:
+            with FwProfiler(self.name, ticks, self.log):
                 self._call_user_func(ticks, args, kwargs)
 
             rt.request_cond_var.acquire()

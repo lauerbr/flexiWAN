@@ -20,33 +20,22 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 
-import json
 import os
 import psutil
 import shlex
 import tempfile
-import subprocess
 import sys
-import traceback
-import yaml
 
 from shutil import copyfile
 
 import fwfirewall
 import fwglobals
 import fwutils
-import fwlte
 import fwwifi
 import fwroutes
 import fw_input_validation
-import fw_os_utils
 
 from fwobject import FwObject
-from fw_os_utils import CalledProcessSigTerm
-
-system_checker_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tools/system_checker/")
-sys.path.append(system_checker_path)
-import fwsystem_checker_common
 
 fwagent_api = {
     'get-device-certificate':        '_get_device_certificate',
@@ -144,7 +133,7 @@ class FWAGENT_API(FwObject):
         try:
             script = os.path.join(tempfile.mkdtemp(prefix='fwupgrade-'), 'fwupgrade.sh')
             copyfile('{}/fwupgrade.sh'.format(dir), script)
-        except Exception as e:
+        except Exception:
             return { 'message': 'Failed to copy upgrade file', 'ok': 0 }
 
         job_id = fwglobals.g.jobs.current_job_id
@@ -191,7 +180,7 @@ class FWAGENT_API(FwObject):
         try:
             script = os.path.join(tempfile.mkdtemp(prefix='fwupgrade-'), script_name)
             copyfile('{}/tools/{}'.format(dir, script_name), script)
-        except Exception as e:
+        except Exception:
             return { 'message': 'Failed to copy linux upgrade file', 'ok': 0 }
 
         job_id = fwglobals.g.jobs.current_job_id

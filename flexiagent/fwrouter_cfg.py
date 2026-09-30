@@ -20,19 +20,12 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 
-import json
 import re
 import traceback
-import copy
 
 from netaddr import IPNetwork
 
 from fwcfg_database import FwCfgDatabase
-from fwroutes       import FwRoute, FwConditionalRoute
-
-import fwglobals
-import fwrouter_api
-import fwutils
 
 
 class FwRouterCfg(FwCfgDatabase):
@@ -124,7 +117,14 @@ class FwRouterCfg(FwCfgDatabase):
         return FwCfgDatabase.dumps(self, cfg, sections, full)
 
     def get_interfaces(self, type=None, dev_id=None, ip=None, device_type=None):
-        interfaces = self.get_requests('add-interface')
+        if dev_id and isinstance(dev_id, str):
+            # The request key is built out of the dev_id (see
+            # fwtranslate_add_interface.get_request_key()), so fetch
+            # the requested interface directly without scanning database.
+            params = self.get_params('add-interface:' + dev_id)
+            interfaces = [params] if params else []
+        else:
+            interfaces = self.get_requests('add-interface')
         if not type and not dev_id and not ip and not device_type:
             return interfaces
         result = []
@@ -153,39 +153,6 @@ class FwRouterCfg(FwCfgDatabase):
             elif dev_id and 'dev_id' in params and params['dev_id'] != dev_id:
                 continue
             result.append(params)
-        return result
-
-    def get_unconditional_routes(self):
-        result = []
-        routes = self.get_requests('add-route')
-        for r in routes:
-            if not r.get('condition'):
-                result.append(FwRoute(
-                                r['addr'],
-                                r['via'],
-                                r.get('dev'),
-                                proto   = 'static',
-                                metric  = int(r.get('metric', '0')),
-                                on_link = r.get('onLink', False),
-                                dev_id  = r.get('dev_id')
-                                ))
-        return result
-
-    def get_conditional_routes(self):
-        result = []
-        routes = self.get_requests('add-route')
-        for r in routes:
-            if r.get('condition'):
-                result.append(FwConditionalRoute(
-                                r['condition'],
-                                r['addr'],
-                                r['via'],
-                                r.get('dev'),
-                                proto   = 'static',
-                                metric  = int(r.get('metric', '0')),
-                                on_link = r.get('onLink', False),
-                                dev_id  = r.get('dev_id')
-                                ))
         return result
 
     def get_routing_filters(self):
@@ -273,78 +240,15 @@ class FwRouterCfg(FwCfgDatabase):
             return self['add-lan-nat-policy']['params']
         return None
 
-    def get_sync_list(self, requests):
-        """Intersects requests provided within 'requests' argument against
-        the requests stored in the local database and generates output list that
-        can be used for synchronization of router configuration. This output list
-        is called sync-list. It includes sequence of 'remove-X', 'modify-X' and
-        'add-X' requests that should be applied to device in order to configure
-        it with the configuration, reflected in the input list 'requests'.
-
-        :param requests: list of requests that reflects the desired configuration.
-                         The requests are in formant of flexiManage<->flexiEdge
-                         message: { 'message': 'add-X', 'params': {...}}.
-
-        :returns: synchronization list - list of 'remove-X', 'modify-X' and
-                         'add-X' requests that takes device to the desired
-                         configuration if applied to the device.
+    def _sync_list_add_modification(self, dumped_request, input_request, output_requests):
+        """The router configuration items with modified parameters are
+        synchronized by 'modify-X' requests. See FwCfgDatabase.get_sync_list().
         """
+        # Rename requests in input list with 'modify-X'.
+        input_request['message'] = input_request['message'].replace('add-', 'modify-')
 
-        # Firstly we hack a little bit the input list as follows:
-        # build dictionary out of this list where values are list elements
-        # (requests) and keys are request keys that local database would use
-        # to store these requests. Accidentally these are exactly same keys
-        # dumped by fwglobals.g.router_cfg.dump() used below ;)
-        #
-        input_requests = {}
-        for request in copy.deepcopy(requests): # Use deepcopy as we might modify input_requests[key] below
-            key = self._get_request_key(request)
-            input_requests.update({key:request})
-
-        # Now dump local configuration in order of 'remove-X' list.
-        # We will go over dumped requests and filter out requests that present
-        # in the input list and that have same parameters. They correspond to
-        # configuration items that should be not touched by synchronization.
-        # The dumped requests that present in the input list but have different
-        # parameters stand for modifications.
-        #
-        dumped_requests = fwglobals.g.router_cfg.dump(keys=True)
-        output_requests = []
-
-        for dumped_request in dumped_requests:
-            dumped_key = dumped_request['key']
-            if dumped_key in input_requests:
-                # The configuration item presents in the input list.
-                #
-                dumped_params = dumped_request.get('params')
-                input_params  = input_requests[dumped_key].get('params')
-                if fwutils.compare_request_params(dumped_params, input_params):
-                    # The configuration item has exactly same parameters.
-                    # It does not require sync, so remove it from input list.
-                    #
-                    del input_requests[dumped_key]
-                else:
-                    # The configuration item should be modified.
-                    # Rename requests in input list with 'modify-X'.
-                    #
-                    request = input_requests[dumped_key]
-                    request['message'] = request['message'].replace('add-', 'modify-')
-            else:
-                # The configuration item does not present in the input list.
-                # So it stands for item to be removed. Add correspondent request
-                # to the output list.
-                # Ignore 'start-router', 'stop-router', etc as they are not
-                # an configuration items.
-                #
-                if not re.search('(start|stop)-router', dumped_request['message']):
-                    dumped_request['message'] = dumped_request['message'].replace('add-', 'remove-')
-                    output_requests.append(dumped_request)
-
-
-        # At this point the input list includes 'add-X' requests that stand
-        # for new or for modified configuration items.
-        # Just go and add them to the output list 'as-is'.
-        #
-        output_requests += list(input_requests.values())
-
-        return output_requests
+    def _sync_list_is_removable(self, dumped_request):
+        """Ignore 'start-router', 'stop-router', etc as they are not configuration items.
+        See FwCfgDatabase.get_sync_list().
+        """
+        return not re.search('(start|stop)-router', dumped_request['message'])

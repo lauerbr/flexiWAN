@@ -20,15 +20,9 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 ################################################################################
 
-import time
-import threading
-import traceback
-import subprocess
 import fwglobals
 import fwthread
 import fwutils
-import fwnetplan
-import os
 from fwcfg_request_handler import FwCfgRequestHandler
 import fw_os_utils
 import fwwifi

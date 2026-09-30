@@ -60,18 +60,6 @@ class VPP_API_CLIENT(VPPApiClient):
         self.lock = FwRlock("VPP_API_CLIENT")
         self.log = log
 
-#        vpp_methods = []
-#        for method_name in dir(self):
-#            if callable(getattr(self, method_name)):
-#                vpp_methods.append(method_name)
-#        print("vpp.methods: " + format(vpp_methods))
-#        vpp_api_methods = []
-#        for method_name in dir(self.api):
-#            if callable(getattr(self.api, method_name)):
-#                vpp_api_methods.append(method_name)
-#        print("vpp.api.methods: " + format(vpp_api_methods))
-
-
     def call(self, api_name, ignore_retval=True, **kwargs):
         """Calls VPP API.
 
