@@ -7,7 +7,7 @@ agent:
     servers: [1.1.1.1, 8.8.8.8]         # default: [1.1.1.1, 8.8.8.8]
     probe_timeout: 1000                 # default: 1000 msec
   debug: true                           # default: true
-  daemon_socket: 127.0.0.1:9090         # default: 127.0.0.1:9090
+  daemon_socket: /run/flexiwan/fwagent.sock  # default: /run/flexiwan/fwagent.sock (unix socket only, host:port is ignored)
   watchdog:
     deadlock:
       enabled: true                     # default: true

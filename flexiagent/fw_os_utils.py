@@ -21,6 +21,7 @@
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import time
 
@@ -74,6 +75,49 @@ def vpp_does_run():
     :returns:           Return 'True' if VPP is running.
     """
     return True if vpp_pid() else False
+
+def ensure_private_dir(path, mode=0o700):
+    """Create directory if needed and ensure it is owned by the effective user
+    and is not accessible by others (default 0700).
+    Raises PermissionError if the path exists and is not a directory owned by us
+    (e.g. was pre-created by another local user or is a symlink).
+    """
+    os.makedirs(path, mode=mode, exist_ok=True)
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        raise PermissionError(f"{path}: is not a directory owned by uid {os.geteuid()}")
+    if stat.S_IMODE(st.st_mode) != mode:
+        os.chmod(path, mode)
+    return path
+
+def open_private_file(path, flags=os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600):
+    """Open file with restrictive permissions and return file descriptor.
+    The permissions are enforced also for file that exists already.
+    Symbolic links are not followed.
+    """
+    fd = os.open(path, flags | os.O_NOFOLLOW, mode)
+    try:
+        os.fchmod(fd, mode)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+def write_private_file(path, content, mode=0o600):
+    """Write the 'content' (str or bytes) into file created with restrictive permissions."""
+    fd = open_private_file(path, mode=mode)
+    with os.fdopen(fd, 'wb' if isinstance(content, bytes) else 'w') as f:
+        f.write(content)
+
+def touch_private_file(path, mode=0o600):
+    """Create file if it does not exist and ensure it has restrictive permissions.
+    Errors are ignored (e.g. symbolic link, read-only filesystem), as this is
+    a best effort hardening that should not break the caller.
+    """
+    try:
+        os.close(open_private_file(path, flags=os.O_WRONLY | os.O_CREAT, mode=mode))
+    except OSError:
+        pass
 
 def run_linux_commands(commands, exception_on_error=True):
     for command in commands:

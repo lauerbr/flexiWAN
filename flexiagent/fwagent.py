@@ -36,11 +36,13 @@ import os
 import glob
 import ssl
 import socket
+import struct
 import sys
 import random
 import time
 try:
     import psutil
+    assert psutil   # the import verifies the python environment, psutil is used by other modules
 except Exception as e:
     print("failed to load psutil, ensure you use python 3.8 or later")
     sys.exit(1)
@@ -991,6 +993,32 @@ def show(agent, configuration, database, status, networks, watchdog):
             if out:
                 print(out)
 
+# Methods of FwagentDaemon that might be invoked by RPC (see rpc_handler()).
+#
+FWAGENT_DAEMON_RPC_METHODS = ('ping', 'show', 'start_agent', 'stop_agent', 'reset_device', 'api')
+
+# Agent modules which functions might be invoked by the 'api' RPC with 'api_module'
+# argument. No in-tree caller uses this option, so the list is empty.
+# Add module names here explicitly, if needed. Never add modules that provide
+# generic execution primitives, like fwutils or fw_os_utils.
+#
+FWAGENT_DAEMON_RPC_API_MODULES = ()
+
+class FwagentRpcDaemon(Pyro4.Daemon):
+    """Pyro4 daemon that serves RPC-s on unix socket and accepts connections
+    from root processes only. The socket itself resides in a root-only directory
+    and has 0600 permissions, so the SO_PEERCRED check is defense in depth.
+    """
+    def validateHandshake(self, conn, data):
+        try:
+            creds = conn.sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i'))
+            _pid, uid, _gid = struct.unpack('3i', creds)
+        except Exception as e:
+            raise Pyro4.errors.SecurityError(f"failed to get peer credentials: {e}")
+        if uid != 0 and uid != os.geteuid():
+            raise Pyro4.errors.SecurityError(f"RPC from uid {uid} is not allowed")
+        return super().validateHandshake(conn, data)
+
 @Pyro4.expose
 class FwagentDaemon(FwObject):
     """This class implements abstraction of Fwagent that runs in daemon mode.
@@ -1083,6 +1111,8 @@ class FwagentDaemon(FwObject):
         # The daemon MUST have agent. If agent is in the middle of creation/initialization,
         # disable pretty all API-s excepting the not hurting, like "show".
         #
+        if not isinstance(func, str) or func.startswith('_') or func not in FWAGENT_DAEMON_RPC_METHODS:
+            raise Exception(f"RPC '{func}' is not allowed")
         if not (fwglobals.g.agent_initialized or func in ['show', 'ping']):
             raise Exception("initializing")
         return getattr(self, func)(**kwargs)
@@ -1193,6 +1223,13 @@ class FwagentDaemon(FwObject):
         """
         fwglobals.log.trace(f'{api_name}({api_args if api_args else ""}): enter')
 
+        if not isinstance(api_name, str) or api_name.startswith('_'):
+            fwglobals.log.error(f'api({api_name}): private or invalid function name is not allowed')
+            return
+        if api_module and api_module not in FWAGENT_DAEMON_RPC_API_MODULES:
+            fwglobals.log.error(f'api({api_name}, {api_module}): module is not allowed')
+            return
+
         if api_object:
             api_func = fwglobals.g.get_object_func(api_object, api_name)
         else:
@@ -1232,19 +1269,39 @@ class FwagentDaemon(FwObject):
             self.log.debug("RPC service: already started")
             return
 
-        # Ensure the RPC port is not in use
+        # The RPC is served on unix socket in root-only directory.
+        # Ensure the socket is not in use by other running daemon and remove
+        # stale socket file if exists, as Pyro4 fails to bind to existing file.
         #
-        for c in psutil.net_connections():
-            if c.laddr.port == fwglobals.g.FWAGENT_DAEMON_PORT:
-                err_str = f"port {c.laddr.port} is in use, try other port (fwagent_conf.yaml:daemon_socket)"
+        sock_path = fwglobals.g.FWAGENT_DAEMON_SOCKET
+        fw_os_utils.ensure_private_dir(os.path.dirname(sock_path), 0o700)
+        if os.path.lexists(sock_path):
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                probe.settimeout(2)
+                probe.connect(sock_path)
+                in_use = True
+            except OSError:
+                in_use = False
+            finally:
+                probe.close()
+            if in_use:
+                err_str = f"socket {sock_path} is in use, try other socket (fwagent_conf.yaml:daemon_socket)"
                 fwglobals.log.error(err_str)
                 raise Exception(err_str)
+            os.unlink(sock_path)
+
+        old_umask = os.umask(0o077)   # ensure socket is created with 0600 permissions
+        try:
+            rpc_daemon = FwagentRpcDaemon(unixsocket=sock_path)
+        finally:
+            os.umask(old_umask)
+        os.chmod(sock_path, 0o600)
 
         self.thread_rpc_loop = threading.Thread(
                                 target=lambda: Pyro4.Daemon.serveSimple(
                                         {self: fwglobals.g.FWAGENT_DAEMON_NAME},
-                                        host=fwglobals.g.FWAGENT_DAEMON_HOST,
-                                        port=fwglobals.g.FWAGENT_DAEMON_PORT,
+                                        daemon=rpc_daemon,
                                         ns=False,
                                         verbose=False),
                                 name='FwagentDaemon RPC Thread',
