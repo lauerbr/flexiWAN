@@ -283,4 +283,18 @@ describe('Initialization', () => {
     expect(c).toBe(0);
     deviceQueues.resumeQueue('CCC');
   });
+
+  test('Removing old jobs across more than one iteration chunk', async () => {
+    // no queue is started for this device, so the jobs stay inactive
+    const numJobs = 1200;
+    for (let i = 0; i < numJobs; i++) {
+      await deviceQueues.addJob('EEE', 'user3', '4edd40c86762e0fb12000003',
+        { testdata: 'EEE' + i }, true, { priority: 'normal', attempts: 1 });
+    }
+    let c = await deviceQueues.getCount('inactive', 'EEE');
+    expect(c).toBe(numJobs);
+    await deviceQueues.removeJobs('inactive', -1);
+    c = await deviceQueues.getCount('inactive', 'EEE');
+    expect(c).toBe(0);
+  }, 60000);
 });
