@@ -37,6 +37,7 @@ import fwtranslate_add_firewall_policy
 import fwfirewall
 import fw_nat_command_helpers
 import fw_vpp_coredump_utils
+import fw_input_validation
 import fwglobals
 import fwlte
 import fwnetplan
@@ -1061,9 +1062,11 @@ class FWROUTER_API(FwCfgRequestHandler):
                 # Delay 5 seconds to make sure Linux interfaces were initialized
                 time.sleep(5)
                 for gw in gateways:
+                    if not fw_input_validation.is_valid_ip(gw):
+                        continue
                     try:
-                        cmd = 'ping -c 3 %s' % gw
-                        output = subprocess.check_output(cmd, shell=True).decode()
+                        cmd = ['ping', '-c', '3', str(gw)]
+                        output = subprocess.check_output(cmd).decode()
                         self.log.debug("call: %s: %s" % (cmd, output))
                     except Exception as e:
                         self.log.debug("call: %s: %s" % (cmd, str(e)))

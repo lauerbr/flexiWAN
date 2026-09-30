@@ -272,7 +272,7 @@ def get_default_route(if_name=None, resolve_dev_id=True):
 
 def get_gateway_arp_entries(gw):
     try:
-        out = subprocess.check_output(f'ip neigh show to {gw}', shell=True).decode()
+        out = subprocess.check_output(['ip', 'neigh', 'show', 'to', str(gw)]).decode()
         return out.splitlines()
     except Exception as e:
         fwglobals.log.error(f'get_gateway_arp({gw}): failed to fetch arp for gateway. {str(e)}')
@@ -4294,6 +4294,8 @@ def set_ip_on_bridge_bvi_interface(bridge_addr, dev_id, is_add):
     :returns: (True, None) tuple on success, (False, <error string>) on failure.
     """
     try:
+        if not fw_input_validation.is_valid_network(bridge_addr):
+            return (False, f'invalid bridge address {bridge_addr!r}')
         tap = bridge_addr_to_bvi_tap(bridge_addr)
         if not tap:
             return (False, 'tap is not found for bvi interface')

@@ -515,8 +515,8 @@ class FwFrr(FwObject):
         :return: dictionary where key is destination address, and value is a list of available routes
         '''
         try:
-            cmd = f'vtysh -c "show ip route {address} json"'
-            frr_json_output = subprocess.check_output(cmd, shell=True).decode().strip()
+            cmd = ['vtysh', '-c', f'show ip route {address} json']
+            frr_json_output = subprocess.check_output(cmd).decode().strip()
             output_json     = json.loads(frr_json_output)
             if not dev:
                 return output_json

@@ -25,6 +25,7 @@ Helper functions to convert classifications and actions into VPP ACL commands
 import copy
 import ctypes
 
+import fw_input_validation
 import fwglobals
 import fwutils
 from fw_traffic_identification import TRAFFIC_IMPORTANCE_VALUES, TRAFFIC_SERVICE_CLASS_VALUES
@@ -467,6 +468,17 @@ def build_iptables_rule_cmd(iptable, proto_id, dst_ip, dport_first, dport_last,
     :param is_permit - deny (0), permit (1)
     :return: Dict representing the commands.
     """
+
+    # The values come from firewall rules received from flexiManage and are
+    # used in shell command, so validate them.
+    for ip in [dst_ip, src_ip]:
+        if ip and not fw_input_validation.is_valid_network(ip):
+            raise ValueError(f"build_iptables_rule_cmd: invalid IP/network {ip!r}")
+    for port in [dport_first, dport_last, sport_first, sport_last]:
+        if not fw_input_validation.is_valid_int(port, 0, 0xffff):
+            raise ValueError(f"build_iptables_rule_cmd: invalid port {port!r}")
+    if not fw_input_validation.is_shell_safe_word(str(iptable)):
+        raise ValueError(f"build_iptables_rule_cmd: invalid iptable {iptable!r}")
 
     proto = f"-p {protocol_map[proto_id]}" if proto_id != 0 else ""
 
