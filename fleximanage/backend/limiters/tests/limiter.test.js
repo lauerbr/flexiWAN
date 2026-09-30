@@ -19,7 +19,9 @@ jest.setTimeout(40000);
 
 const Limiter = require('../limiter');
 
-const key = 'a';
+// unique key per test, the limiter state may be kept in redis
+let keyNum = 0;
+let key = null;
 
 const sleep = seconds => {
   return new Promise((resolve, reject) => {
@@ -31,6 +33,7 @@ describe('Limiter functionally', () => {
   let testLimiter = null;
   beforeEach(() => {
     testLimiter = new Limiter('test', 5, 10, 10);
+    key = `a-${Date.now()}-${keyNum++}`;
   });
 
   it('should not be blocked before the sixth time', async (done) => {

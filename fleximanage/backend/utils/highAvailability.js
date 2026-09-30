@@ -23,6 +23,7 @@ const redis = require('redis');
 const { getRedisAuthUrl } = require('../utils/httpUtils');
 const Leader = require('./redis-leader');
 const logger = require('../logging/logging')({ module: module.filename, type: 'periodic' });
+const configs = require('../configs')();
 
 class HighAvailability {
   /**
@@ -35,9 +36,11 @@ class HighAvailability {
     this.redis = redis.createClient({ url: redisUrlNoAuth });
     if (redisAuth) this.redis.auth(redisAuth);
     // Create a leader
+    // The lock is renewed every third of the TTL. A standby instance takes over
+    // at most TTL msec after the active instance stops renewing the lock
     const options = {
       key: 'haleaderselect',
-      ttl: 2000,
+      ttl: configs.get('haLeaderTtl', 'number') || 12000,
       wait: 1000
     };
     this.leader = new Leader(this.redis, options);

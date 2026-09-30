@@ -25,6 +25,20 @@ const util = require('util');
 const uuid = require('uuid');
 const EventEmitter = require('events').EventEmitter;
 
+// Extend the lock TTL only if this instance still holds it (atomic check-and-set)
+const RENEW_SCRIPT = `
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('pexpire', KEYS[1], ARGV[2])
+end
+return 0`;
+
+// Release the lock only if this instance holds it (atomic check-and-delete)
+const RELEASE_SCRIPT = `
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0`;
+
 // Make the key less prone to collision
 const hashKey = function (key) {
   return 'leader:' + crypto.createHash('sha1').update(key).digest('hex');
@@ -37,6 +51,9 @@ function Leader (redis, options) {
   this.options = {};
   this.options.ttl = options.ttl || 10000; // Lock time to live in milliseconds
   this.options.wait = options.wait || 1000; // time between 2 tries to get lock
+  // time between 2 renewals of the lock, a third of the TTL so the lock survives
+  // a missed renewal or a short event loop stall
+  this.options.renew = options.renew || Math.floor(this.options.ttl / 3);
 
   this.key = hashKey(options.key || 'default');
 }
@@ -47,15 +64,14 @@ util.inherits(Leader, EventEmitter);
   * Renew leader as elected
   */
 Leader.prototype._renew = function _renew () {
-  // it is safer to check we are still leader
-  this.isLeader(function (err, isLeader) {
-    if (isLeader) {
-      this.redis.pexpire(this.key, this.options.ttl, function (err) {
-        if (err) {
-          this.emit('error', err);
-        }
-      }.bind(this));
-    } else {
+  // extend the lock only if we are still the leader, in one atomic operation
+  this.redis.eval(RENEW_SCRIPT, 1, this.key, this.id, this.options.ttl, function (err, res) {
+    if (err) {
+      // keep trying on the next interval, the lock is lost only when the TTL expires
+      this.emit('error', err);
+      return;
+    }
+    if (!res) {
       clearInterval(this.renewId);
       clearTimeout(this.electId);
       this.electId = setTimeout(Leader.prototype.elect.bind(this), this.options.wait);
@@ -81,7 +97,7 @@ Leader.prototype.elect = function elect () {
       this.emit('elected');
       clearTimeout(this.electId);
       clearInterval(this.renewId);
-      this.renewId = setInterval(Leader.prototype._renew.bind(this), this.options.ttl / 2);
+      this.renewId = setInterval(Leader.prototype._renew.bind(this), this.options.renew);
     } else {
       // use setTimeout to avoid max call stack error
       clearTimeout(this.electId);
@@ -105,18 +121,14 @@ Leader.prototype.isLeader = function isLeader (done) {
   * stop trying to be a leader
   */
 Leader.prototype.stop = function stop () {
-  this.isLeader(function (err, isLeader) {
-    if (isLeader) {
-      // possible race condition, cause we need atomicity on get -> isEqual -> delete
-      this.redis.del(this.key, function (err) {
-        if (err) {
-          return this.emit('error', err);
-        }
-        this.emit('revoked');
-      }.bind(this));
+  clearInterval(this.renewId);
+  clearTimeout(this.electId);
+  // delete the lock only if we are the leader, in one atomic operation
+  this.redis.eval(RELEASE_SCRIPT, 1, this.key, this.id, function (err, res) {
+    if (err) {
+      return this.emit('error', err);
     }
-    clearInterval(this.renewId);
-    clearTimeout(this.electId);
+    if (res) this.emit('revoked');
   }.bind(this));
 };
 
