@@ -63,13 +63,20 @@ class UsersService {
    **/
   static async usersResetPasswordPOST ({ resetPasswordRequest }) {
     try {
+      // Only a single e-mail address string is allowed
+      if (typeof resetPasswordRequest?.email !== 'string') {
+        return Service.rejectResponse('Password Reset Error', 400);
+      }
       const validateKey = randomKey(30);
 
       const resp = await Users.findOneAndUpdate(
         // Query, use the email and make sure user is verified when reset password
         { email: resetPasswordRequest.email, state: 'verified' },
         // Update
-        { 'emailTokens.resetPassword': validateKey },
+        {
+          'emailTokens.resetPassword': validateKey,
+          'emailTokens.resetPasswordExpires': new Date(Date.now() + 24 * 60 * 60 * 1000)
+        },
         // Options
         { upsert: false, new: false }
       );
@@ -79,7 +86,8 @@ class UsersService {
         await mailer.sendMailHTML(
           configs.get('mailerEnvelopeFromAddress'),
           configs.get('mailerFromAddress'),
-          resetPasswordRequest.email,
+          // Send only to the address stored for the user
+          resp.email,
           `Reset Password for Your ${configs.get('companyName')} Account`,
           `<h2>Reset Password for your ${configs.get('companyName')} Account</h2>
                 <b>It has been requested to reset your account password.
@@ -124,21 +132,33 @@ class UsersService {
       if (!auth.validatePassword(updatePasswordRequest.password)) {
         return Service.rejectResponse('Bad Password', 403);
       }
+      if (typeof updatePasswordRequest.email !== 'string' ||
+        typeof updatePasswordRequest.token !== 'string' || updatePasswordRequest.token === '') {
+        return Service.rejectResponse('Password Reset Error', 400);
+      }
 
       const registerUser = await Users.findOneAndUpdate(
         // Query, use the email and password reset token
         {
           email: updatePasswordRequest.email,
-          'emailTokens.resetPassword': updatePasswordRequest.token
+          'emailTokens.resetPassword': updatePasswordRequest.token,
+          'emailTokens.resetPasswordExpires': { $gt: new Date() }
         },
         // Update
         {
-          state: 'verified',
-          'emailTokens.resetPassword': ''
+          $set: {
+            state: 'verified',
+            'emailTokens.resetPassword': '',
+            'emailTokens.resetPasswordExpires': null
+          },
+          $inc: { tokenVersion: 1 }
         },
         // Options
         { upsert: false, new: true }
       );
+      if (!registerUser) {
+        return Service.rejectResponse('Password Reset Error', 400);
+      }
       await registerUser.setPassword(updatePasswordRequest.password);
       await registerUser.save();
 
