@@ -133,7 +133,7 @@ class FwFqdnResolver(FwObject):
             checked_keys = []
             fqdns = dict(self.db.fetch(self.db_prefix, {}))
             for fqdn, data in fqdns.items():
-                if len(checked_keys) > RESOLUTION_COUNT:
+                if len(checked_keys) >= RESOLUTION_COUNT:
                     break
 
                 current_ip_addresses = data.get('ips')

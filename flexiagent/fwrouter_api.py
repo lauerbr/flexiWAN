@@ -39,7 +39,6 @@ import fw_nat_command_helpers
 import fw_vpp_coredump_utils
 import fw_input_validation
 import fwglobals
-import fwlte
 import fwnetplan
 import fw_os_utils
 import fwpppoe
@@ -713,7 +712,6 @@ class FWROUTER_API(FwCfgRequestHandler):
                fwpppoe.is_pppoe_interface(dev_id=dev_id)):
                 continue
             tap_name = fwutils.dev_id_to_tap(dev_id)
-            is_lte = fwlte.is_lte_interface_by_dev_id(dev_id)
             if interface.get('deviceType') == 'lte':
                 modem = fwglobals.g.modems.get(dev_id)
                 if modem.is_connecting_or_resetting():

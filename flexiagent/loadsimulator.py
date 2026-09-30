@@ -232,7 +232,7 @@ class LoadSimulator(FwObject):
 
         # Add the update to the list of updates. If the list is full,
         # remove the oldest update before pushing the new one
-        if len(fwstats.updates_list) is UPDATE_LIST_MAX_SIZE:
+        if len(fwstats.updates_list) >= UPDATE_LIST_MAX_SIZE:
             fwstats.updates_list.pop(0)
 
         fwstats.updates_list.append({

@@ -230,7 +230,7 @@ class FwStatistics(FwObject):
             self.stats['lte_stats'] = prev_stats['lte_stats']
             self.stats['wifi_stats'] = prev_stats['wifi_stats']
 
-        if len(self.updates_list) is UPDATE_LIST_MAX_SIZE:
+        if len(self.updates_list) >= UPDATE_LIST_MAX_SIZE:
             self.updates_list.pop(0)
 
         stats = dict(self.stats)

@@ -1164,7 +1164,7 @@ def _build_dev_id_to_vpp_if_name_maps(dev_id, vpp_if_name):
     shif = _vppctl_read('show hardware-interfaces')
     if shif == None:
         fwglobals.log.debug("_build_dev_id_to_vpp_if_name_maps: Error reading interface info")
-    data = shif.splitlines()
+    data = shif.splitlines() if shif else []
     for interface in _get_group_delimiter(data, r"^\w.*?\d"):
         # Contains data for a given interface
         data = ''.join(interface)
@@ -1817,7 +1817,6 @@ def _vppctl_read(cmd, wait=True):
     # make sure command succeeded, try up to 200 iterations
     for _ in range(retries):
         try:
-            _ = open(os.devnull, 'r+b', 0)
             handle = os.popen('sudo vppctl ' + cmd + ' 2>/dev/null')
             data = handle.read()
             retcode = handle.close()
@@ -1870,7 +1869,7 @@ def stop_vpp():
             if v["Driver_str"] in dpdk.dpdk_drivers:
                 dpdk.unbind_one(v["Slot"], False)
                 dpdk_ifs.append(d)
-        elif "Module_str" != "":
+        elif v.get("Module_str", "") != "":
             dpdk_ifs.append(d)
     # refresh nic_details
     dpdk.get_nic_details()

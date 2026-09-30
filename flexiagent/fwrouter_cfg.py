@@ -30,7 +30,6 @@ from netaddr import IPNetwork
 from fwcfg_database import FwCfgDatabase
 from fwroutes       import FwRoute, FwConditionalRoute
 
-import fwglobals
 import fwrouter_api
 import fwutils
 
@@ -308,7 +307,7 @@ class FwRouterCfg(FwCfgDatabase):
         # The dumped requests that present in the input list but have different
         # parameters stand for modifications.
         #
-        dumped_requests = fwglobals.g.router_cfg.dump(keys=True)
+        dumped_requests = self.dump(keys=True)
         output_requests = []
 
         for dumped_request in dumped_requests:
