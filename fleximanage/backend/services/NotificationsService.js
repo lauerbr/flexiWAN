@@ -24,7 +24,7 @@ const { getAccessTokenOrgList } = require('../utils/membershipUtils');
 const { getUserOrganizations } = require('../utils/membershipUtils');
 const mongoose = require('mongoose');
 const logger = require('../logging/logging')({ module: module.filename, type: 'req' });
-const { getMatchFilters } = require('../utils/filterUtils');
+const { getMatchFilters, validateSort } = require('../utils/filterUtils');
 const notificationsConf = require('../models/notificationsConf');
 const { membership } = require('../models/membership');
 const Organizations = require('../models/organizations');
@@ -84,6 +84,7 @@ class NotificationsService {
     let orgList;
 
     try {
+      validateSort(sortField, sortOrder);
       orgList = await getAccessTokenOrgList(user, org, false);
       const query = { org: { $in: orgList.map(o => mongoose.Types.ObjectId(o)) } };
 
