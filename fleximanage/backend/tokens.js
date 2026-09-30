@@ -73,7 +73,11 @@ exports.getRefreshToken = async ({ user }, override = {}) => {
   return jwt.sign({
     _id: user._id,
     username: user.username,
-    ...override
+    ...override,
+    // Mark the token as a refresh token, only such tokens are accepted for refresh
+    type: 'refresh',
+    // Refresh tokens are revoked by incrementing the user token version
+    tokenVersion: user.tokenVersion ?? 0
   }, configs.get('userTokenSecretKey'), {
     expiresIn: configs.get('userRefreshTokenExpiration', 'number')
   });
@@ -81,6 +85,22 @@ exports.getRefreshToken = async ({ user }, override = {}) => {
 
 exports.verifyToken = (token) => {
   return jwt.verify(token, configs.get('userTokenSecretKey'));
+};
+
+/**
+ * Check if a decoded token payload is a refresh token.
+ * Refresh tokens issued before the 'refresh' type was introduced have no type,
+ * no permissions and no account, which distinguishes them from access tokens,
+ * access keys and login tokens.
+ * @param {Object} payload - decoded and verified JWT payload
+ * @return {boolean}
+ */
+exports.isRefreshTokenPayload = (payload) => {
+  if (!payload || typeof payload !== 'object') return false;
+  if (payload.type === 'refresh') return true;
+  return payload.type === undefined && payload.perms === undefined &&
+    payload.account === undefined && payload.org === undefined &&
+    typeof payload._id === 'string';
 };
 
 exports.getLoginProcessToken = async (user) => {

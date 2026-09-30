@@ -45,6 +45,16 @@ const emailTokens = new Schema({
     maxlength: 50,
     required: false,
     default: ''
+  },
+  // expiration time of the verify token
+  verifyExpires: {
+    type: Date,
+    required: false
+  },
+  // expiration time of the reset password token
+  resetPasswordExpires: {
+    type: Date,
+    required: false
   }
 });
 
@@ -130,6 +140,11 @@ const User = new Schema({
   defaultOrg: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'organizations'
+  },
+  // Incremented to revoke all issued refresh tokens (logout, password change)
+  tokenVersion: {
+    type: Number,
+    default: 0
   },
   // MFA configuration
   mfa: {

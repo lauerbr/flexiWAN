@@ -22,7 +22,8 @@ var ExtractJwt = require('passport-jwt').ExtractJwt;
 var User = require('./models/users');
 const Accounts = require('./models/accounts');
 const Accesstoken = require('./models/accesstokens');
-const { verifyToken, getToken } = require('./tokens');
+const { verifyToken, getToken, isRefreshTokenPayload } = require('./tokens');
+const { isWhitelistedOrigin } = require('./routes/cors');
 const { permissionMasks } = require('./models/membership');
 const { orgUpdateFromNull, getUserOrgByID } = require('./utils/membershipUtils');
 var configs = require('./configs')();
@@ -51,6 +52,11 @@ exports.jwtPassport = passport.use('jwt', new JwtStrategy(opts, async (jwtPayloa
     return done(null, false, { message: 'A login token is unauthorized to access this resource' });
   }
 
+  // refresh tokens can only be used to generate a new token
+  if (jwtPayload.type === 'refresh') {
+    return done(null, false, { message: 'Invalid token used' });
+  }
+
   // check if account exists on payload
   if (!jwtPayload.account) return done(null, false, { message: 'Account not found' });
 
@@ -75,6 +81,19 @@ exports.jwtPassport = passport.use('jwt', new JwtStrategy(opts, async (jwtPayloa
       if (err) {
         return done(err, false);
       } else if (user) {
+        // The permissions in the token are calculated for the organization in the token.
+        // If the user switched to another organization since the token was issued
+        // (e.g. in another browser tab), the token permissions are stale, reject it.
+        // A new token can be generated using the refresh token.
+        if (!isAccessTokenType(jwtPayload.type) && jwtPayload.org) {
+          const userOrgId = user.defaultOrg ? user.defaultOrg._id.toString() : null;
+          if (userOrgId !== jwtPayload.org.toString()) {
+            return done(null, false, {
+              name: 'OrganizationChangedError',
+              message: 'Organization changed, please refresh token'
+            });
+          }
+        }
         const res = await setUserPerms(user, jwtPayload, token);
         return res === true
           ? done(null, user)
@@ -106,8 +125,10 @@ passport.use('jwt-login', new JwtStrategy(opts, async (jwtPayload, done) => {
     });
 }));
 
+const isAccessTokenType = (type) => ['app_access_key', 'app_access_token'].includes(type);
+
 const setUserPerms = async (user, jwtPayload, token = null) => {
-  const isAccessToken = ['app_access_key', 'app_access_token'].includes(jwtPayload.type);
+  const isAccessToken = isAccessTokenType(jwtPayload.type);
   const isValidAccount = user.defaultAccount &&
     user.defaultAccount._id.toString() === jwtPayload.account;
 
@@ -226,14 +247,18 @@ exports.verifyUserJWT = function (req, res, next) {
         // If the JWT token has expired, but the request
         // contains a valid refresh token, accept the request
         // and attach a new token to the response.
-        // TBD: Maintain refresh tokens in database and add
-        // check also if the refresh token hasn't been revoked.
-        if (info && info.name === 'TokenExpiredError' &&
+        // Refresh tokens are revoked by incrementing the user tokenVersion.
+        // A token with stale organization permissions is refreshed the same way.
+        if (info && ['TokenExpiredError', 'OrganizationChangedError'].includes(info.name) &&
                     req.headers['refresh-token']) {
           try {
             const refreshToken = req.headers['refresh-token'];
-            await verifyToken(refreshToken);
-            const decodedToken = jwt.decode(refreshToken);
+            const decodedToken = await verifyToken(refreshToken);
+            // Only refresh tokens can be used to generate a new token,
+            // access tokens, access keys and login tokens are not allowed
+            if (!isRefreshTokenPayload(decodedToken)) {
+              throw new Error('Not a refresh token');
+            }
             const userDetails = await User
               .findOne({ _id: decodedToken._id })
               .populate('defaultOrg')
@@ -242,6 +267,12 @@ exports.verifyUserJWT = function (req, res, next) {
             // Don't return a token if user was deleted
             // since the refresh token has been issued.
             if (!userDetails) return next(createError(401));
+
+            // Don't return a token if the refresh token was revoked
+            // (logout, password change)
+            if ((decodedToken.tokenVersion ?? 0) !== (userDetails.tokenVersion ?? 0)) {
+              throw new Error('Refresh token revoked');
+            }
 
             // If user has no permission for organization set to null
             if (userDetails.defaultOrg) {
@@ -264,7 +295,7 @@ exports.verifyUserJWT = function (req, res, next) {
             await setUserPerms(userDetails, jwtPayload);
             user = userDetails;
           } catch (err) {
-            if (req.header('Origin') !== undefined) {
+            if (isWhitelistedOrigin(req.header('Origin'))) {
               res.setHeader('Access-Control-Allow-Origin', req.header('Origin'));
             }
             if (err.name === 'TokenExpiredError') {
@@ -277,7 +308,7 @@ exports.verifyUserJWT = function (req, res, next) {
               : next(createError(401));
           }
         } else {
-          if (req.header('Origin') !== undefined) {
+          if (isWhitelistedOrigin(req.header('Origin'))) {
             res.setHeader('Access-Control-Allow-Origin', req.header('Origin'));
           }
           const [errMsg, status, responseMsg] = err
@@ -350,11 +381,38 @@ exports.verifyPermissionEx = function (serviceName, { method, user, openapi }) {
     case 'accountsIdSubscriptionStatusGET':
     case 'organizationsSelectPOST':
     case 'configurationRestServersGET':
-    case 'notificationsConfEmailsPUT':
       return true;
+    case 'notificationsConfEmailsPUT':
+      // Viewers are allowed to modify their own email subscriptions, the service
+      // checks the 'put' permission per organization. Require at least 'get' here.
+      return (user.perms[accessType] & permissionMasks.get);
   }
 
   return (user.perms[accessType] & permissionMasks[restCommand]);
+};
+
+/**
+ * Revoke all refresh tokens of the user that owns the given refresh token
+ * @param {string} refreshToken - refresh token
+ * @return {boolean} true if revoked
+ */
+exports.revokeRefreshTokens = async function (refreshToken) {
+  if (typeof refreshToken !== 'string' || refreshToken === '') return false;
+  let decoded = null;
+  try {
+    decoded = verifyToken(refreshToken);
+  } catch (err) {
+    return false;
+  }
+  if (!isRefreshTokenPayload(decoded)) return false;
+  const res = await User.updateOne(
+    {
+      _id: decoded._id,
+      tokenVersion: decoded.tokenVersion ? decoded.tokenVersion : { $in: [0, null] }
+    },
+    { $inc: { tokenVersion: 1 } }
+  );
+  return res?.nModified > 0;
 };
 
 exports.validatePassword = function (password) {
