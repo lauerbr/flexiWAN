@@ -454,9 +454,6 @@ class FwLinuxRoutes(dict):
     def __init__(self, prefix=None, preference=None, via=None, proto=None):
         self._linux_get_routes(prefix, preference, via, proto)
 
-    def __getitem__(self, item):
-        return self[item]
-
     def __iadd__(self, src_obj):  # overriding "+=" for "self += src_obj"
         '''Overrides the "+=" operator: adds items from 'src_obj' dict into self.
         If item with same key exists in self, the KeyError exception is thrown.
