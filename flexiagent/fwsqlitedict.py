@@ -22,6 +22,7 @@
 
 import pickle
 import sqlite3
+import threading
 
 from sqlitedict import SqliteDict
 
@@ -43,6 +44,10 @@ class FwSqliteDict(FwObject, SqliteDict):
     """This is base DB class implementation, based on SqliteDict."""
 
     def __init__(self, db_filename, table_name=None, autocommit=True):
+        # The put()/delete()/list_X() methods read the top level tree, modify it
+        # and write it back. Serialize them to avoid lost updates, when they are
+        # called simultaneously by different threads.
+        self.rmw_lock = threading.RLock()
         # The databases might store secrets (tunnel keys, passwords, etc),
         # so ensure they are not readable by other users.
         if db_filename and db_filename != ':memory:':
@@ -82,6 +87,10 @@ class FwSqliteDict(FwObject, SqliteDict):
         return sub_tree   # the last sub_tree is a leaf node that represents the requested value
 
     def put(self, path, val):
+        with self.rmw_lock:
+            self._put(path, val)
+
+    def _put(self, path, val):
 
         nodes = path.split('/')
         if len(nodes) == 1:
@@ -108,6 +117,10 @@ class FwSqliteDict(FwObject, SqliteDict):
 
 
     def delete(self, path):
+        with self.rmw_lock:
+            self._delete(path)
+
+    def _delete(self, path):
 
         nodes = path.split('/')
         if len(nodes) == 1:
@@ -132,16 +145,18 @@ class FwSqliteDict(FwObject, SqliteDict):
 
 
     def list_insert(self, path, elem, at_head=True):
-        l = self.fetch(path, [])
-        idx = 0 if at_head else len(l)
-        l.insert(idx, elem)
-        self.put(path, l)
+        with self.rmw_lock:
+            l = self.fetch(path, [])
+            idx = 0 if at_head else len(l)
+            l.insert(idx, elem)
+            self._put(path, l)
 
     def list_pop(self, path):
-        l = self.fetch(path)
-        if not l:
-            return None
-        elem = l.pop(0)
-        self.put(path, l)
-        return elem
+        with self.rmw_lock:
+            l = self.fetch(path)
+            if not l:
+                return None
+            elem = l.pop(0)
+            self._put(path, l)
+            return elem
 

@@ -123,7 +123,14 @@ class FwRouterCfg(FwCfgDatabase):
         return FwCfgDatabase.dumps(self, cfg, sections, full)
 
     def get_interfaces(self, type=None, dev_id=None, ip=None, device_type=None):
-        interfaces = self.get_requests('add-interface')
+        if dev_id and isinstance(dev_id, str):
+            # The request key is built out of the dev_id (see
+            # fwtranslate_add_interface.get_request_key()), so fetch
+            # the requested interface directly without scanning database.
+            params = self.get_params('add-interface:' + dev_id)
+            interfaces = [params] if params else []
+        else:
+            interfaces = self.get_requests('add-interface')
         if not type and not dev_id and not ip and not device_type:
             return interfaces
         result = []

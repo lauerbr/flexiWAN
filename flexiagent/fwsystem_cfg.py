@@ -83,9 +83,17 @@ class FwSystemCfg(FwCfgDatabase):
         return self.get_requests('add-lte')
 
     def get_link_monitors(self, link_monitor_id=None):
-        link_monitors = self.get_requests('add-link-monitor')
         if not link_monitor_id:
-            return link_monitors
+            return self.get_requests('add-link-monitor')
+
+        if isinstance(link_monitor_id, str):
+            # The request key is built out of the link monitor id (see
+            # fwtranslate_add_link_monitor.get_request_key()), so fetch
+            # the requested link monitor directly without scanning database.
+            params = self.get_params('add-link-monitor-' + link_monitor_id)
+            link_monitors = [params] if params else []
+        else:
+            link_monitors = self.get_requests('add-link-monitor')
 
         result = []
         for link_monitor in link_monitors:

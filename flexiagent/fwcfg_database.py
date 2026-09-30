@@ -152,9 +152,11 @@ class FwCfgDatabase(FwSqliteDict):
 
         :returns: the tuple of the command list and the 'executed' flag
         """
-        if not req_key in self:
+        try:
+            entry = self[req_key]   # fetch and unpickle the entry once
+        except KeyError:
             return (None, None)
-        return (self[req_key].get('cmd_list'), self[req_key].get('executed'))
+        return (entry.get('cmd_list'), entry.get('executed'))
 
     def exists(self, request):
         """Check if entry exists in DB.
@@ -175,9 +177,10 @@ class FwCfgDatabase(FwSqliteDict):
         :param request: The configuration request, e.g. modify-interface.
         :returns: parameters of the request stored in the database.
         """
-        if req_key in self:
+        try:
             return self[req_key].get('params')
-        return None
+        except KeyError:
+            return None
 
     def dump(self, types, escape=None, full=False, keys=False):
         """Dumps database configuration into list of requests that look exactly
@@ -207,16 +210,17 @@ class FwCfgDatabase(FwSqliteDict):
         for req in types:
             for key in db_keys:
                 if re.match(req, key):
+                    entry = self[key]   # fetch and unpickle the entry once
                     request = {
-                        'message': self[key].get('request',""),
-                        'params':  self[key].get('params', "")
+                        'message': entry.get('request',""),
+                        'params':  entry.get('params', "")
                     }
                     if request['params'] == None:  # flexiManage team doesn't like None :)
                         request['params'] = {}
                     if full:
                         request.update({
-                            'cmd_list': self[key].get('cmd_list', ""),
-                            'executed': self[key].get('executed', "")})
+                            'cmd_list': entry.get('cmd_list', ""),
+                            'executed': entry.get('executed', "")})
                     if keys:
                         request.update({'key': key})
                     cfg.append(request)
