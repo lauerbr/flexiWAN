@@ -306,8 +306,10 @@ class FwAgent(FwObject):
         try:
             resp = ureq.urlopen(req, context=ctx)
             device_token = resp.read().decode()
-            # save received token on disk to survive reboots
-            with open(fwglobals.g.DEVICE_TOKEN_FILE, 'w') as f:
+            # save received token on disk to survive reboots.
+            # The token is a secret, so make it readable by root only.
+            fd = fw_os_utils.open_private_file(fwglobals.g.DEVICE_TOKEN_FILE, mode=0o600)
+            with os.fdopen(fd, 'w') as f:
                 fwutils.file_write_and_flush(f, device_token)
             self.log.info("Registration succeeded:")
             self.log.info("  Hostname:  " + machine_name)

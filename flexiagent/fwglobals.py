@@ -420,7 +420,6 @@ class Fwglobals(FwObject):
         self.FRR_BGPD_FILE      = '/etc/frr/bgpd.conf'
         self.FRR_STATICD_FILE   = '/etc/frr/staticd.conf'
         self.FRR_VTYSH_FILE      = '/etc/frr/vtysh.conf'
-        self.FRR_VTYSH_FILE_TMP  = '/tmp/frr.tmp'
         self.FRR_OSPF_ACL       = f'{self.config.frr.config_prefix}-redist-ospf-acl'
         self.FRR_OSPF_ROUTE_MAP = f'{self.config.frr.config_prefix}-redist-ospf-rm'
         self.FRR_BGP_ACL       = f'{self.config.frr.config_prefix}-redist-bgp-acl'
@@ -429,7 +428,6 @@ class Fwglobals(FwObject):
         self.FRR_LAN_NAT_ROUTE_MAP = f"{self.config.frr.config_prefix}-redist-lan-nat-rm"
         self.KEA_DHCP_CONFIG_FILE = '/etc/kea/kea-dhcp4.conf'
         self.KEA_DHCP_CONFIG_FILE_BACKUP = f'/etc/kea/kea-dhcp4.conf.{self.config.dhcp_server.backup_extension}'
-        self.KEA_DHCP_CONFIG_FILE_TMP = '/tmp/kea-dhcp4.tmp'
         self.KEA_DHCP_LEASE_DB_FILE = '/var/lib/kea/dhcp4.leases'
         self.PPPOE_CONFIG_PATH   = '/etc/ppp/'
         self.PPPOE_CONFIG_PROVIDER_FILE   = self.config.pppoe.provider_filename

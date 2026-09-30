@@ -22,7 +22,9 @@
 
 import ast
 import json
+import os
 import subprocess
+import tempfile
 
 import fwglobals
 import fwutils
@@ -664,11 +666,14 @@ class FwFrr(FwObject):
         return res
 
     def validate_config(self, commands):
-        with open(fwglobals.g.FRR_VTYSH_FILE_TMP, 'w+') as f:
+        # Use private temporary file instead of fixed /tmp path, as the commands
+        # might include secrets, like BGP passwords (mkstemp creates 0600 file).
+        fd, tmp_file = tempfile.mkstemp(prefix='frr.', suffix='.tmp')
+        with os.fdopen(fd, 'w+') as f:
             f.write('\n'.join(commands))
 
         try:
-            subprocess.check_output(f'vtysh -f {fwglobals.g.FRR_VTYSH_FILE_TMP} -C',  stderr=subprocess.STDOUT, shell=True)
+            subprocess.check_output(['vtysh', '-f', tmp_file, '-C'],  stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             err = str(e.output.decode().strip())
             self.log.error(f"_validate_config({commands}) failed: {err}")
@@ -676,3 +681,5 @@ class FwFrr(FwObject):
         except Exception as e:
             self.log.error(f"_validate_config({commands}) failed: {str(e)}")
             raise e
+        finally:
+            os.remove(tmp_file)

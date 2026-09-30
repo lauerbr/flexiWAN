@@ -27,6 +27,7 @@ import os
 import shutil
 import subprocess
 import re
+import tempfile
 
 from netaddr import IPNetwork
 
@@ -127,11 +128,13 @@ class FwDhcpServer(FwObject):
             raise e
 
     def _validate_config(self):
-        with open(fwglobals.g.KEA_DHCP_CONFIG_FILE_TMP, 'w+') as f:
+        # Use private temporary file (mkstemp creates 0600 file) instead of fixed /tmp path
+        fd, tmp_file = tempfile.mkstemp(prefix='kea-dhcp4.', suffix='.tmp')
+        with os.fdopen(fd, 'w+') as f:
             json.dump(self.config, f, indent=2)
 
         try:
-            subprocess.check_output(f'kea-dhcp4 -t {fwglobals.g.KEA_DHCP_CONFIG_FILE_TMP}',  stderr=subprocess.STDOUT, shell=True)
+            subprocess.check_output(['kea-dhcp4', '-t', tmp_file],  stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             err = str(e.output.decode().strip())
             self.log.error(f"_validate_config(): {err}")
@@ -139,6 +142,8 @@ class FwDhcpServer(FwObject):
         except Exception as e:
             self.log.error(f"_validate_config(): {str(e)}")
             raise e
+        finally:
+            os.remove(tmp_file)
 
     def _write_config_file(self, validate=True):
         if validate:
