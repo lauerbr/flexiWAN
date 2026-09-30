@@ -167,7 +167,16 @@ class Connections {
       this.processDeviceMessage(message);
     } else if (channel === devInfoChannelName) {
       // all devices will publish their state on this common channel
-      const { hostId: remoteHostId, machineId, action, info } = JSON.parse(message);
+      let parsedMessage;
+      try {
+        parsedMessage = JSON.parse(message);
+      } catch (err) {
+        logger.warn('Failed to parse device info channel message', {
+          params: { channel, err: err.message }
+        });
+        return;
+      }
+      const { hostId: remoteHostId, machineId, action, info } = parsedMessage ?? {};
       if (remoteHostId && hostId !== remoteHostId && machineId && action) {
         if (action === 'info' && info?.constructor === Object) {
           const fields = Object.keys(info);
@@ -232,9 +241,15 @@ class Connections {
    * @return {void}
    */
   processDeviceMessage (message) {
-    const parsed = JSON.parse(message);
-    const { seq, msg } = parsed;
-    if (!seq) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(message);
+    } catch (err) {
+      logger.warn('Failed to parse device message', { params: { err: err.message } });
+      return;
+    }
+    const { seq, msg } = parsed ?? {};
+    if (!seq || !msg || typeof msg !== 'object') return;
     const { resolver, rejecter, validator, tohandle } = this.msgQueue[seq] ?? {};
     if (typeof resolver === 'function') {
       // Only validate device's response if the device processed the message
@@ -414,8 +429,35 @@ class Connections {
    * @param  {Callback} done a callback used to signal the results to the websocket
    * @return {void}
    */
+  /**
+   * Build the connection URL from the websocket request.
+   * @param  {Object} req the http GET request sent by the device
+   * @return {URL|null} connection URL or null if origin or url are invalid
+   */
+  static getConnectionUrl (req) {
+    const origin = req?.headers?.origin;
+    if (typeof origin !== 'string' || !/^https?:\/\/[^/\s]+$/i.test(origin) ||
+      typeof req.url !== 'string' || !req.url.startsWith('/')) {
+      return null;
+    }
+    try {
+      return new URL(`${origin}${req.url}`);
+    } catch (err) {
+      return null;
+    }
+  }
+
   async verifyDevice (info, done) {
-    const connectionURL = new URL(`${info.req.headers.origin}${info.req.url}`);
+    const connectionURL = Connections.getConnectionUrl(info.req);
+    if (!connectionURL) {
+      logger.warn('Device verification failed, invalid origin or url', {
+        params: {
+          ip: info.req?.connection?.remoteAddress,
+          origin: info.req?.headers?.origin
+        }
+      });
+      return done(false, 400);
+    }
     const ip =
       info.req.headers['x-forwarded-for'] || info.req.connection.remoteAddress;
     logger.info('Device connection opened', {
@@ -564,7 +606,8 @@ class Connections {
    * @return {void}
    */
   createConnection (socket, req) {
-    const connectionURL = new URL(`${req.headers.origin}${req.url}`);
+    // The url was already validated in verifyDevice
+    const connectionURL = Connections.getConnectionUrl(req);
     const machineId = connectionURL.pathname.substring(1);
     const deviceInfo = this.devices.getDeviceInfo(machineId);
 
@@ -589,7 +632,13 @@ class Connections {
 
     socket.on('message', (message) => {
       // response from the device received
-      this.processDeviceMessage(message);
+      try {
+        this.processDeviceMessage(message);
+      } catch (err) {
+        logger.warn('Failed to process device message', {
+          params: { machineId, err: err.message }
+        });
+      }
     });
 
     socket.on('error', err => {

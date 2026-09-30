@@ -19,6 +19,8 @@
 
 const os = require('os');
 const hostname = os.hostname();
+// Random secret used when no secret is configured
+const randomSecret = () => require('crypto').randomBytes(32).toString('hex');
 
 var mongo = {
   // setting the connection string will only give access to that database
@@ -142,11 +144,11 @@ module.exports = {
     // Remember to add the forward slash at the start and end!
     baseUrl: process.env.ME_CONFIG_SITE_BASEURL || '/',
     cookieKeyName: 'mongo-express',
-    cookieSecret: process.env.ME_CONFIG_SITE_COOKIESECRET || 'cookiesecret',
+    cookieSecret: process.env.ME_CONFIG_SITE_COOKIESECRET || randomSecret(),
     host: process.env.VCAP_APP_HOST || 'localhost',
     port: process.env.VCAP_APP_PORT || 8081,
     requestSizeLimit: process.env.ME_CONFIG_REQUEST_SIZE || '50mb',
-    sessionSecret: process.env.ME_CONFIG_SITE_SESSIONSECRET || 'sessionsecret',
+    sessionSecret: process.env.ME_CONFIG_SITE_SESSIONSECRET || randomSecret(),
     sslCert: process.env.ME_CONFIG_SITE_SSL_CRT_PATH || '',
     sslEnabled: process.env.ME_CONFIG_SITE_SSL_ENABLED || false,
     sslKey: process.env.ME_CONFIG_SITE_SSL_KEY_PATH || ''
@@ -155,11 +157,13 @@ module.exports = {
   // set useBasicAuth to true if you want to authenticate mongo-express logins
   // if admin is false, the basicAuthInfo list below will be ignored
   // this will be true unless ME_CONFIG_BASICAUTH_USERNAME is set and is the empty string
-  useBasicAuth: getFileEnv(basicAuthUsername) !== '',
+  // basic authentication is always required, flexiManage enables mongo-express only when
+  // ME_CONFIG_BASICAUTH_USERNAME and ME_CONFIG_BASICAUTH_PASSWORD are set
+  useBasicAuth: true,
 
   basicAuth: {
-    username: getFileEnv(basicAuthUsername) || 'admin',
-    password: getFileEnv(basicAuthPassword) || 'pass'
+    username: getFileEnv(basicAuthUsername) || '',
+    password: getFileEnv(basicAuthPassword) || ''
   },
 
   options: {

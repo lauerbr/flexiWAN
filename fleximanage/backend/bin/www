@@ -22,6 +22,24 @@ const logger = require('../logging/logging')({ module: module.filename, type: 'r
 
 const ExpressServer = require('../expressserver');
 
+// Log unhandled promise rejections instead of letting them crash the process
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', {
+    params: { reason: reason instanceof Error ? reason.stack : String(reason) }
+  });
+});
+
+// The process state is unknown after an uncaught exception, log it and exit cleanly
+// so the process manager can restart the server
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception, exiting', {
+    params: { err: err instanceof Error ? err.stack : String(err) }
+  });
+  console.error('Uncaught exception, exiting', err);
+  process.exitCode = 1;
+  setTimeout(() => process.exit(1), 1000).unref();
+});
+
 const launchServer = async () => {
   try {
     const openapiYaml = path.join(__dirname, '../api', 'openapi.yaml');
