@@ -97,6 +97,14 @@ def test_redact_str_text():
     line = '"psk": 12345, "other": 1'
     assert '12345' not in redact_str(line)
 
+def test_redact_str_command_line():
+    line = "vtysh_cmd failed: sudo /usr/bin/vtysh -c configure -c 'neighbor 1.1.1.1 password s3cr3t' -c x"
+    out = redact_str(line)
+    assert 's3cr3t' not in out
+    assert "neighbor 1.1.1.1 password" in out
+    out = redact_str("commands=['router bgp 1', 'neighbor 1.1.1.1 password abc']")
+    assert 'abc' not in out and "'router bgp 1'" in out
+
 def test_dumps():
     assert 'x1' not in fw_redact.dumps({'password': 'x1'})
     assert redact('plain text') == 'plain text'

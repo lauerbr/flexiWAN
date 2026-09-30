@@ -22,6 +22,7 @@
 
 import fwglobals
 import fwutils
+import fw_input_validation
 
 # {
 #   "entity": "agent",
@@ -102,6 +103,11 @@ def add_routing_bgp(params):
     redistribute_ospf = params.get('redistributeOspf')
     best_path_multipath_relax = params.get('bestPathMultipathRelax')
 
+    # The values are used to build FRR (vtysh) commands, so validate them.
+    fw_input_validation.ensure_int(local_asn, 'BGP local ASN', 0, 4294967295)
+    if router_id:
+        fw_input_validation.ensure_ip(router_id, 'BGP router ID', version=4)
+
     vtysh_commands = [
         f'router bgp {local_asn}',
 
@@ -179,6 +185,7 @@ def add_routing_bgp(params):
 
     for network in networks:
         ip = network.get('ipv4')
+        fw_input_validation.ensure_network(ip, 'BGP network')
         vtysh_commands += [f'network {ip}']
 
     # Add logical interface IP to the network
@@ -190,6 +197,7 @@ def add_routing_bgp(params):
     # "custom" includes a list of commands for FRR CLI (vtysh) under "router bgp"
     custom_commands = params.get('custom', [])
     for custom_command in custom_commands:
+        fwutils.frr_validate_command(custom_command)
         vtysh_commands.append(custom_command)
 
     # During above code lines we put None sometimes. Here we are filtering all None out.

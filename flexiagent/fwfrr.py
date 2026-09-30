@@ -26,6 +26,7 @@ import subprocess
 
 import fwglobals
 import fwutils
+import fw_input_validation as validate
 from fwobject import FwObject
 
 
@@ -192,6 +193,19 @@ class FwFrr(FwObject):
         hold_interval = neighbor.get('holdInterval', global_hold_timer)
         ebgp_multihop = neighbor.get('multiHop', 1) # 1 is the BGP default
 
+        # The values are used to build FRR (vtysh) commands, so validate them
+        # to prevent injection of other commands.
+        #
+        validate.ensure_ip(ip, 'BGP neighbor IP')
+        if remote_asn not in ['internal', 'external']:
+            validate.ensure_int(remote_asn, 'BGP neighbor remote ASN', 0, 4294967295)
+        validate.ensure_int(ebgp_multihop, 'BGP neighbor multihop', 1, 255)
+        if password:
+            validate.ensure_safe_string(password, 'BGP neighbor password', forbidden='"\'`$\\ ')
+        if keepalive_interval and hold_interval:
+            validate.ensure_int(keepalive_interval, 'BGP keepalive interval', 0, 65535)
+            validate.ensure_int(hold_interval, 'BGP hold interval', 0, 65535)
+
         commands = [
             f'neighbor {ip} remote-as {remote_asn}',
 
@@ -215,6 +229,7 @@ class FwFrr(FwObject):
         # "custom" includes a list of commands for FRR CLI (vtysh) after each neighbor
         custom_commands = neighbor.get('custom', [])
         for custom_command in custom_commands:
+            fwutils.frr_validate_command(custom_command)
             commands.append(custom_command)
 
         return commands
@@ -258,6 +273,12 @@ class FwFrr(FwObject):
 
     def translate_route_map_to_frr_commands(self, name, description, action, seq, match_acl_name=None, next_hop=None, custom_commands=[]):
         frr_action = 'permit' if action == 'allow' else 'deny'
+        if description:
+            validate.ensure_safe_string(description, 'routing filter description', forbidden='"`')
+        if next_hop:
+            validate.ensure_ip(next_hop, 'routing filter next hop')
+        for custom_command in custom_commands:
+            fwutils.frr_validate_command(custom_command)
         commands = [
             f'route-map {name} {frr_action} {seq}',
             f'  description {description}',
@@ -342,6 +363,8 @@ class FwFrr(FwObject):
         tmp_group_routes = []
         for rule in rules:
             route, action, next_hop, custom_list = rule.get('route'), rule.get('action'), rule.get('nextHop'), rule.get('custom', [])
+
+            validate.ensure_network(route, 'routing filter route')
 
             if route == '0.0.0.0/0': # don't create group for default route, we always add it at the end.
                 default_rule = (route, action, next_hop, custom_list)

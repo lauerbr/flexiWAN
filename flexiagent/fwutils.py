@@ -33,6 +33,7 @@ import linecache
 import os
 import platform
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -48,6 +49,7 @@ from configparser import ConfigParser
 from netaddr import IPAddress, IPNetwork
 from urllib.parse import urlparse
 
+import fw_input_validation
 import fw_os_utils
 import fwglobals
 import fwlte
@@ -3413,6 +3415,18 @@ allowed_vtysh_outputs = [
     'For this router-id change to take effect, save config and restart ospfd\n',
     'For this router-id change to take effect, use "clear ip ospf process" command\n'
 ]
+def frr_validate_command(command):
+    """Ensure FRR command can't be used to inject other commands or to escape
+    into shell. Raises exception if command is not valid.
+    """
+    if not isinstance(command, str) or fw_input_validation.has_control_chars(command):
+        raise Exception(f"invalid FRR command {command!r}: control characters are not allowed")
+    words = command.split()
+    if words and words[0] == 'do':
+        words = words[1:]
+    if words and words[0] in ['start-shell', 'sh-shell']:
+        raise Exception(f"invalid FRR command {command!r}: shell access is not allowed")
+
 def frr_vtysh_run(commands, restart_frr=False, wait_after=None, on_error_commands=[], forgive_errors=False):
     '''Run vtysh command to configure router
 
@@ -3429,8 +3443,20 @@ def frr_vtysh_run(commands, restart_frr=False, wait_after=None, on_error_command
             frr_vtysh_run(on_error_commands, restart_frr, on_error_commands=[]) # on_error_commands= empty list to prevent infinite loop
             fwglobals.log.debug(f"frr_vtysh_run: revert finished")
     try:
-        shell_commands = ' -c '.join(map(lambda x: '"%s"' % x, commands))
-        vtysh_cmd = f'sudo /usr/bin/vtysh -c "configure" -c {shell_commands}'
+        # The commands might include values received from flexiManage, e.g. BGP
+        # password, route filter description or custom routing commands.
+        # So we don't use shell and pass every command as a separate argument
+        # to vtysh. vtysh treats newlines in the -c argument as command separator,
+        # so reject control characters to prevent injection of other commands.
+        #
+        vtysh_argv = ['sudo', '/usr/bin/vtysh', '-c', 'configure']
+        for command in commands:
+            frr_validate_command(command)
+            vtysh_argv += ['-c', command]
+        vtysh_cmd = ' '.join(shlex.quote(arg) for arg in vtysh_argv)  # for logging only
+
+        p = subprocess.Popen(vtysh_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        (out, err) = p.communicate()
 
         # If frr restart is needed or if router was already started, flush down
         # the frr configuration into file, next frr restart will load it from the file.
@@ -3439,10 +3465,7 @@ def frr_vtysh_run(commands, restart_frr=False, wait_after=None, on_error_command
         # Instead we will do that only once from within _on_start_router_after().
         #
         if restart_frr or fwglobals.g.router_api.state_is_started() == True:
-            vtysh_cmd += (' ; sudo /usr/bin/vtysh -c "write" > /dev/null')
-
-        p = subprocess.Popen(vtysh_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        (out, err) = p.communicate()
+            subprocess.run(['sudo', '/usr/bin/vtysh', '-c', 'write'], stdout=subprocess.DEVNULL)
         # Note, vtysh cli prints errors/warnings to STDOUT.
         # If no errors/warnings, "out" is empty string.
         if out:

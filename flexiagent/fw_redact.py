@@ -78,6 +78,9 @@ def redact(obj):
 # in group 'k', and values (string, number or bare word) in group 'v'.
 _KV_RE = re.compile(r'''(?P<q>["'])(?P<k>[A-Za-z0-9_.\-]+)(?P=q)(?P<sep>\s*:\s*)(?P<v>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^,{}\[\]\s]+)''')
 
+# Matches "password <value>" in command lines, e.g. FRR "neighbor 1.1.1.1 password <value>".
+_CMD_PASSWORD_RE = re.compile(r'(?<![\w-])(?P<k>password|passwd)(?P<sep>\s+)(?P<v>[^\s\'",\]}]+)')
+
 def redact_str(text):
     """Mask values of sensitive keys in a string that contains JSON or
     python representation of dictionaries (e.g. log lines).
@@ -99,7 +102,8 @@ def redact_str(text):
             return m.group(0)
         quote = v[0] if v[:1] in ('"', "'") else ''
         return f"{m.group('q')}{m.group('k')}{m.group('q')}{m.group('sep')}{quote}{REDACTED}{quote}"
-    return _KV_RE.sub(_replace, text)
+    text = _KV_RE.sub(_replace, text)
+    return _CMD_PASSWORD_RE.sub(lambda m: f"{m.group('k')}{m.group('sep')}{REDACTED}", text)
 
 def dumps(obj, **kwargs):
     """json.dumps() of redacted copy of obj."""
