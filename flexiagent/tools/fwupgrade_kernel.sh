@@ -141,17 +141,21 @@ kernel_hwe_upgrade() {
         wifi_drivers_patched=$?
         if [[ -d $wifi_drivers_src_dir && $wifi_drivers_patched -eq 1 ]] ; then
             log "INFO: Patching $apt_pkg_name WiFi drivers to be rebuild when installing new kernel..."
-            temp_dir="/tmp/${apt_pkg_name}_${wifi_drivers_version}"
-            mkdir -p $temp_dir
-            chown _apt:root $temp_dir
-            apt-mark unhold $apt_pkg_name
-            cd $temp_dir
-            apt download ${apt_pkg_name}=${wifi_drivers_version}
-            ar xv ${apt_pkg_name}_${wifi_drivers_version}_*.deb
+            # Use unpredictable private directory instead of fixed /tmp path,
+            # as this script runs as root.
+            temp_dir="$(mktemp -d "/tmp/${apt_pkg_name}_${wifi_drivers_version}.XXXXXX")"
+            if [ -z "$temp_dir" ] || ! cd "$temp_dir" ; then
+                log "Error: failed to create temporary directory for $apt_pkg_name"
+                continue
+            fi
+            chown _apt:root "$temp_dir"
+            apt-mark unhold "$apt_pkg_name"
+            apt download "${apt_pkg_name}=${wifi_drivers_version}"
+            ar xv "${apt_pkg_name}_${wifi_drivers_version}"_*.deb
             tar xJf data.tar.xz -C /
-            chown ubuntu:lxd -R $wifi_drivers_src_dir
+            chown root:root -R "$wifi_drivers_src_dir"
             cd
-            rm -rf $temp_dir
+            rm -rf "$temp_dir"
         else
             log "INFO: No need to patch $apt_pkg_name WiFi drivers."
         fi

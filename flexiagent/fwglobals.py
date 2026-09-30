@@ -35,6 +35,7 @@ from fwqos import FwQoS
 import fwutils
 import threading
 import fw_os_utils
+import fw_redact
 import fw_vpp_coredump_utils
 import fwlte
 import ipaddress
@@ -214,12 +215,13 @@ class Fwglobals(FwObject):
             DEFAULT_MANAGEMENT_URL = 'https://manage.flexiwan.com:443'
             DEFAULT_TOKEN_FILE     = data_path + 'token.txt'
             DEFAULT_UUID           = None
+            DEFAULT_TOKEN_ALLOWED_HOSTS = []
             DEFAULT_WAN_MONITOR_UNASSIGNED_INTERFACES = True
             DEFAULT_WAN_MONITOR_SERVERS = ['1.1.1.1','8.8.8.8']
             DEFAULT_WAN_MONITOR_PROBE_TIMEOUT = 1000  # msec
             DEFAULT_WAN_MONITOR_WINDOW_SIZE = 20
             DEFAULT_WAN_MONITOR_THRESHOLD = 12
-            DEFAULT_DAEMON_SOCKET_NAME  = "127.0.0.1:9090"  # Used for RPC to daemon
+            DEFAULT_DAEMON_SOCKET_NAME  = f"/run/{config.company}/fwagent.sock"  # Unix socket used for RPC to daemon
             DEFAULT_WATCHDOG_DEADLOCK_ENABLED     = True
             DEFAULT_WATCHDOG_CONNECTION_ENABLED   = True
             DEFAULT_WATCHDOG_ROUTER_CFG_WINDOW    = 240  # If user changed configuration in last 240 seconds, VPP might be stopped
@@ -237,6 +239,9 @@ class Fwglobals(FwObject):
                 self.MANAGEMENT_URL = agent_conf.get('server', DEFAULT_MANAGEMENT_URL)
                 self.TOKEN_FILE     = agent_conf.get('token',  DEFAULT_TOKEN_FILE)
                 self.UUID           = agent_conf.get('uuid',   DEFAULT_UUID)
+                # Host name patterns (fnmatch) allowed for 'server'/'repo' claims of the token.
+                # Empty list means any host is allowed (HTTPS is required anyway).
+                self.TOKEN_ALLOWED_HOSTS = agent_conf.get('token_allowed_hosts', DEFAULT_TOKEN_ALLOWED_HOSTS) or []
 
                 # WAN Monitoring
                 self.WAN_MONITOR_UNASSIGNED_INTERFACES = agent_conf.get('monitor_wan',{}).get('monitor_unassigned_interfaces', DEFAULT_WAN_MONITOR_UNASSIGNED_INTERFACES)
@@ -283,6 +288,7 @@ class Fwglobals(FwObject):
                 self.MANAGEMENT_URL = DEFAULT_MANAGEMENT_URL
                 self.TOKEN_FILE     = DEFAULT_TOKEN_FILE
                 self.UUID           = DEFAULT_UUID
+                self.TOKEN_ALLOWED_HOSTS = DEFAULT_TOKEN_ALLOWED_HOSTS
                 self.DAEMON_SOCKET_NAME                = DEFAULT_DAEMON_SOCKET_NAME
                 self.WATCHDOG_DEADLOCK_ENABLED         = DEFAULT_WATCHDOG_DEADLOCK_ENABLED
                 self.WAN_MONITOR_UNASSIGNED_INTERFACES = DEFAULT_WAN_MONITOR_UNASSIGNED_INTERFACES
@@ -369,13 +375,18 @@ class Fwglobals(FwObject):
         Path(self.config.folders.logs).mkdir(parents=True, exist_ok=True)
         Path(self.config.folders.data).mkdir(parents=True, exist_ok=True)
 
+        # Root-only runtime directory for volatile data (in-memory DB-s, RPC socket).
+        # It replaces the world-writable /dev/shm used in the past.
+        self.RUN_PATH = f'/run/{self.config.company}/'
+        fw_os_utils.ensure_private_dir(self.RUN_PATH, 0o700)
+
         # Set default configuration
         self.RETRY_INTERVAL_MIN  = 5 # seconds - is used for both registration and main connection
         self.RETRY_INTERVAL_MAX  = 15
         self.RETRY_INTERVAL_LONG_MIN = 50
         self.RETRY_INTERVAL_LONG_MAX = 70
         self.DATA_PATH           = self.config.folders.data + '/'
-        self.DATA_PATH_RAM       = '/dev/shm/'
+        self.DATA_PATH_RAM       = self.RUN_PATH
         self.FWAGENT_CONF_FILE   = self.DATA_PATH + self.config.filenames.agent_conf  # Can be overridden later!
         self.DEBUG_CONF_FILE     = self.DATA_PATH + 'debug_conf.yaml'
         self.DEVICE_TOKEN_FILE   = self.DATA_PATH + self.config.filenames.device_token
@@ -414,7 +425,6 @@ class Fwglobals(FwObject):
         self.FRR_BGPD_FILE      = '/etc/frr/bgpd.conf'
         self.FRR_STATICD_FILE   = '/etc/frr/staticd.conf'
         self.FRR_VTYSH_FILE      = '/etc/frr/vtysh.conf'
-        self.FRR_VTYSH_FILE_TMP  = '/tmp/frr.tmp'
         self.FRR_OSPF_ACL       = f'{self.config.frr.config_prefix}-redist-ospf-acl'
         self.FRR_OSPF_ROUTE_MAP = f'{self.config.frr.config_prefix}-redist-ospf-rm'
         self.FRR_BGP_ACL       = f'{self.config.frr.config_prefix}-redist-bgp-acl'
@@ -423,7 +433,6 @@ class Fwglobals(FwObject):
         self.FRR_LAN_NAT_ROUTE_MAP = f"{self.config.frr.config_prefix}-redist-lan-nat-rm"
         self.KEA_DHCP_CONFIG_FILE = '/etc/kea/kea-dhcp4.conf'
         self.KEA_DHCP_CONFIG_FILE_BACKUP = f'/etc/kea/kea-dhcp4.conf.{self.config.dhcp_server.backup_extension}'
-        self.KEA_DHCP_CONFIG_FILE_TMP = '/tmp/kea-dhcp4.tmp'
         self.KEA_DHCP_LEASE_DB_FILE = '/var/lib/kea/dhcp4.leases'
         self.PPPOE_CONFIG_PATH   = '/etc/ppp/'
         self.PPPOE_CONFIG_PROVIDER_FILE   = self.config.pppoe.provider_filename
@@ -484,10 +493,7 @@ class Fwglobals(FwObject):
         self.cfg = self.FwConfiguration(self.FWAGENT_CONF_FILE, self.DATA_PATH, log=log)
         self.load_debug_configuration_from_file(debug_conf_file if debug_conf_file else self.DEBUG_CONF_FILE)
 
-        self.FWAGENT_DAEMON_HOST = self.cfg.DAEMON_SOCKET_NAME.split(":")[0]
-        self.FWAGENT_DAEMON_PORT = int(self.cfg.DAEMON_SOCKET_NAME.split(":")[1])
-        self.FWAGENT_DAEMON_NAME = f'{self.config.commands.agent.cmd}.daemon'
-        self.FWAGENT_DAEMON_URI  = 'PYRO:%s@%s:%d' % (self.FWAGENT_DAEMON_NAME, self.FWAGENT_DAEMON_HOST, self.FWAGENT_DAEMON_PORT)
+        self._set_daemon_socket(self.cfg.DAEMON_SOCKET_NAME)
 
         self.sqlite_dicts = {}
 
@@ -510,6 +516,25 @@ class Fwglobals(FwObject):
                 cli_import = __import__(f'cli.{cli_module_name}')
                 cli_module = getattr(cli_import, cli_module_name)
                 cli_modules.update({cli_module_name: cli_module})
+
+    def _set_daemon_socket(self, daemon_socket):
+        """Set the path of the unix socket used for RPC to the agent daemon.
+        The RPC must not be served on TCP socket, as any local user/service could
+        use it to run code as root. Therefore only socket files located in
+        the root-only runtime directory (RUN_PATH) are accepted. The legacy
+        'host:port' values of the 'daemon_socket' option in fwagent_conf.yaml
+        are ignored and the default unix socket is used instead.
+        """
+        default_socket = self.RUN_PATH + 'fwagent.sock'
+        daemon_socket  = str(daemon_socket) if daemon_socket else default_socket
+        socket_name    = daemon_socket[len(self.RUN_PATH):] if daemon_socket.startswith(self.RUN_PATH) else ''
+        if not socket_name or '/' in socket_name or socket_name.startswith('.'):
+            if self.log:
+                self.log.debug(f"daemon_socket '{daemon_socket}' is not supported, use unix socket {default_socket}")
+            daemon_socket = default_socket
+        self.FWAGENT_DAEMON_SOCKET = daemon_socket
+        self.FWAGENT_DAEMON_NAME   = f'{self.config.commands.agent.cmd}.daemon'
+        self.FWAGENT_DAEMON_URI    = 'PYRO:%s@./u:%s' % (self.FWAGENT_DAEMON_NAME, self.FWAGENT_DAEMON_SOCKET)
 
     def finalize(self):
         for sqlite_dict in self.sqlite_dicts.values():
@@ -911,7 +936,7 @@ class Fwglobals(FwObject):
 
         except Exception as e:
             global log
-            err_str = "%s(%s): %s" % (req, format(request.get('params')), str(e))
+            err_str = "%s(%s): %s" % (req, format(fw_redact.redact(request.get('params'))), str(e))
             if isinstance(e, fw_os_utils.CalledProcessSigTerm):
                 log.debug(err_str)
             else:

@@ -31,16 +31,19 @@ def fwagent_signal_handler(signum, frame):
 signal.signal(signal.SIGINT, fwagent_signal_handler)
 
 import enum
+import fnmatch
 import json
 import os
 import glob
 import ssl
 import socket
+import struct
 import sys
 import random
 import time
 try:
     import psutil
+    assert psutil   # the import verifies the python environment, psutil is used by other modules
 except Exception as e:
     print("failed to load psutil, ensure you use python 3.8 or later")
     sys.exit(1)
@@ -62,6 +65,8 @@ import fwikev2
 import fwlte
 import fwmultilink
 import fw_os_utils
+import fw_redact
+import fw_input_validation
 import fwpppoe
 import fwrouter_cfg
 import fwthread
@@ -130,6 +135,33 @@ class FwAgent(FwObject):
         self.ws.finalize()
         super().finalize()
 
+    def _is_allowed_token_url(self, url):
+        """Check the URL received in the 'server' or 'repo' claim of the token.
+        The agent can't verify the token signature (it has no secret), so the claims
+        are not trusted: require HTTPS (HTTP is allowed only if 'bypass_certificate'
+        is set explicitly in fwagent_conf.yaml for development setups), and if
+        'token_allowed_hosts' is configured in fwagent_conf.yaml, the host must match
+        one of its patterns (e.g. '*.flexiwan.com').
+        """
+        if not isinstance(url, str) or not url or fw_input_validation.has_control_chars(url) or \
+           any(c in url for c in ' "\'`$\\'):
+            return False
+        try:
+            parsed = uparse.urlparse(url)
+            host = parsed.hostname
+        except ValueError:
+            return False
+        if parsed.scheme != 'https' and not (parsed.scheme == 'http' and fwglobals.g.cfg.BYPASS_CERT):
+            self.log.error(f"token: URL {url} must use https")
+            return False
+        if not host or not fw_input_validation.is_valid_host(host):
+            return False
+        allowed_hosts = fwglobals.g.cfg.TOKEN_ALLOWED_HOSTS
+        if allowed_hosts and not any(fnmatch.fnmatch(host.lower(), str(p).lower()) for p in allowed_hosts):
+            self.log.error(f"token: host {host} is not in token_allowed_hosts {allowed_hosts}")
+            return False
+        return True
+
     def _setup_repository(self, repo):
         # Extract repo info. e.g. 'https://deb.flexiwan.com|flexiWAN|main'
         repo_split = repo.split('|')
@@ -137,6 +169,11 @@ class FwAgent(FwObject):
             self.log.error("Registration error: Incorrect repository info %s" % (repo))
             return False
         repo_server, repo_repo, repo_name = repo_split[0], repo_split[1], repo_split[2]
+        # The values are written into apt source file, so validate them
+        if not self._is_allowed_token_url(repo_server) or \
+           not re.fullmatch(r'[A-Za-z0-9._~/-]+', repo_repo) or not re.fullmatch(r'[A-Za-z0-9._-]+', repo_name):
+            self.log.error("Registration error: repository info is not allowed %s" % (repo))
+            return False
         # Get current repo configuration
         repo_files = glob.glob(fwglobals.g.REPO_SOURCE_DIR + "flexiwan*")
         if len(repo_files) != 1:
@@ -183,7 +220,7 @@ class FwAgent(FwObject):
         try:
             parsed_token = jwt.decode(token, options={"verify_signature": False})
         except Exception as _e:
-            self.log.error(f"invalid token: '{token}'")
+            self.log.error(f"invalid token (length={len(token) if token else 0})")
             raise _e
 
         # If repository defined in token, make sure device works with that repo
@@ -197,6 +234,10 @@ class FwAgent(FwObject):
         # Setup the flexiManage server to work with
         server = parsed_token.get('server')
         if server:
+            if not self._is_allowed_token_url(server):
+                raise AssertionError(f"management server {server} from token is not allowed")
+            if server != fwglobals.g.cfg.MANAGEMENT_URL:
+                self.log.warning(f"management url from token {server} differs from configured {fwglobals.g.cfg.MANAGEMENT_URL}")
             # Use server from token
             fwglobals.g.cfg.MANAGEMENT_URL = server
             self.log.info(f"use management url from token: {server}")
@@ -289,7 +330,7 @@ class FwAgent(FwObject):
                 'cpuInfo': cpu_info,
                 'distro': {'version': linux_version, 'codename': codename},
         }
-        self.log.debug("Registering to %s with: %s" % (url, json.dumps(data)))
+        self.log.debug("Registering to %s with: %s" % (url, fw_redact.dumps(data)))
         data.update({'interfaces': json.dumps(interfaces)})
         data = uparse.urlencode(data).encode()
         req = ureq.Request(url, data)
@@ -303,8 +344,10 @@ class FwAgent(FwObject):
         try:
             resp = ureq.urlopen(req, context=ctx)
             device_token = resp.read().decode()
-            # save received token on disk to survive reboots
-            with open(fwglobals.g.DEVICE_TOKEN_FILE, 'w') as f:
+            # save received token on disk to survive reboots.
+            # The token is a secret, so make it readable by root only.
+            fd = fw_os_utils.open_private_file(fwglobals.g.DEVICE_TOKEN_FILE, mode=0o600)
+            with os.fdopen(fd, 'w') as f:
                 fwutils.file_write_and_flush(f, device_token)
             self.log.info("Registration succeeded:")
             self.log.info("  Hostname:  " + machine_name)
@@ -991,6 +1034,32 @@ def show(agent, configuration, database, status, networks, watchdog):
             if out:
                 print(out)
 
+# Methods of FwagentDaemon that might be invoked by RPC (see rpc_handler()).
+#
+FWAGENT_DAEMON_RPC_METHODS = ('ping', 'show', 'start_agent', 'stop_agent', 'reset_device', 'api')
+
+# Agent modules which functions might be invoked by the 'api' RPC with 'api_module'
+# argument. No in-tree caller uses this option, so the list is empty.
+# Add module names here explicitly, if needed. Never add modules that provide
+# generic execution primitives, like fwutils or fw_os_utils.
+#
+FWAGENT_DAEMON_RPC_API_MODULES = ()
+
+class FwagentRpcDaemon(Pyro4.Daemon):
+    """Pyro4 daemon that serves RPC-s on unix socket and accepts connections
+    from root processes only. The socket itself resides in a root-only directory
+    and has 0600 permissions, so the SO_PEERCRED check is defense in depth.
+    """
+    def validateHandshake(self, conn, data):
+        try:
+            creds = conn.sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i'))
+            _pid, uid, _gid = struct.unpack('3i', creds)
+        except Exception as e:
+            raise Pyro4.errors.SecurityError(f"failed to get peer credentials: {e}")
+        if uid != 0 and uid != os.geteuid():
+            raise Pyro4.errors.SecurityError(f"RPC from uid {uid} is not allowed")
+        return super().validateHandshake(conn, data)
+
 @Pyro4.expose
 class FwagentDaemon(FwObject):
     """This class implements abstraction of Fwagent that runs in daemon mode.
@@ -1083,6 +1152,8 @@ class FwagentDaemon(FwObject):
         # The daemon MUST have agent. If agent is in the middle of creation/initialization,
         # disable pretty all API-s excepting the not hurting, like "show".
         #
+        if not isinstance(func, str) or func.startswith('_') or func not in FWAGENT_DAEMON_RPC_METHODS:
+            raise Exception(f"RPC '{func}' is not allowed")
         if not (fwglobals.g.agent_initialized or func in ['show', 'ping']):
             raise Exception("initializing")
         return getattr(self, func)(**kwargs)
@@ -1193,6 +1264,13 @@ class FwagentDaemon(FwObject):
         """
         fwglobals.log.trace(f'{api_name}({api_args if api_args else ""}): enter')
 
+        if not isinstance(api_name, str) or api_name.startswith('_'):
+            fwglobals.log.error(f'api({api_name}): private or invalid function name is not allowed')
+            return
+        if api_module and api_module not in FWAGENT_DAEMON_RPC_API_MODULES:
+            fwglobals.log.error(f'api({api_name}, {api_module}): module is not allowed')
+            return
+
         if api_object:
             api_func = fwglobals.g.get_object_func(api_object, api_name)
         else:
@@ -1232,19 +1310,39 @@ class FwagentDaemon(FwObject):
             self.log.debug("RPC service: already started")
             return
 
-        # Ensure the RPC port is not in use
+        # The RPC is served on unix socket in root-only directory.
+        # Ensure the socket is not in use by other running daemon and remove
+        # stale socket file if exists, as Pyro4 fails to bind to existing file.
         #
-        for c in psutil.net_connections():
-            if c.laddr.port == fwglobals.g.FWAGENT_DAEMON_PORT:
-                err_str = f"port {c.laddr.port} is in use, try other port (fwagent_conf.yaml:daemon_socket)"
+        sock_path = fwglobals.g.FWAGENT_DAEMON_SOCKET
+        fw_os_utils.ensure_private_dir(os.path.dirname(sock_path), 0o700)
+        if os.path.lexists(sock_path):
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                probe.settimeout(2)
+                probe.connect(sock_path)
+                in_use = True
+            except OSError:
+                in_use = False
+            finally:
+                probe.close()
+            if in_use:
+                err_str = f"socket {sock_path} is in use, try other socket (fwagent_conf.yaml:daemon_socket)"
                 fwglobals.log.error(err_str)
                 raise Exception(err_str)
+            os.unlink(sock_path)
+
+        old_umask = os.umask(0o077)   # ensure socket is created with 0600 permissions
+        try:
+            rpc_daemon = FwagentRpcDaemon(unixsocket=sock_path)
+        finally:
+            os.umask(old_umask)
+        os.chmod(sock_path, 0o600)
 
         self.thread_rpc_loop = threading.Thread(
                                 target=lambda: Pyro4.Daemon.serveSimple(
                                         {self: fwglobals.g.FWAGENT_DAEMON_NAME},
-                                        host=fwglobals.g.FWAGENT_DAEMON_HOST,
-                                        port=fwglobals.g.FWAGENT_DAEMON_PORT,
+                                        daemon=rpc_daemon,
                                         ns=False,
                                         verbose=False),
                                 name='FwagentDaemon RPC Thread',

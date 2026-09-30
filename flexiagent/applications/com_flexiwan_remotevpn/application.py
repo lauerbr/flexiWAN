@@ -22,9 +22,11 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from os.path import exists
 
 from netaddr import IPNetwork
@@ -40,6 +42,22 @@ from applications.fwapplication_interface import FwApplicationInterface
 agent_dir = os.path.join(applications_dir, "../")
 sys.path.append(agent_dir)
 import fw_os_utils
+import fw_input_validation
+
+def _apt_key_add_from_url(url):
+    """Download apt key over HTTPS into temporary file and add it to apt.
+    It replaces the 'wget -O - <url> | apt-key add -' pipe, so failure
+    to download is not masked by the pipe.
+    """
+    if not url.startswith('https://'):
+        raise Exception(f'refuse to fetch apt key over non-HTTPS URL {url}')
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        key_file = os.path.join(tmp_dir, 'repo.gpg')
+        subprocess.check_call(['wget', '-q', '--https-only', '-O', key_file, url])
+        subprocess.check_call(['apt-key', 'add', key_file], stdout=subprocess.DEVNULL)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 class Application(FwApplicationInterface):
 
@@ -62,14 +80,14 @@ class Application(FwApplicationInterface):
 
             distro = os.popen('lsb_release -cs').read().strip()
             try:
+                _apt_key_add_from_url('https://swupdate.openvpn.net/repos/repo-public.gpg')
                 fw_os_utils.run_linux_commands( [
-                    'wget -O - https://swupdate.openvpn.net/repos/repo-public.gpg|apt-key add -',
                     f'echo "deb http://build.openvpn.net/debian/openvpn/release/2.5 {distro} main" > /etc/apt/sources.list.d/openvpn-aptrepo.list',
                 ])
             except Exception as e:
                 self.log.error(f"failed to install from openvpn repo. trying another way: {str(e)}")
+                _apt_key_add_from_url('https://vpnrepo.flexiwan.com/debian/openvpn/release/2.5/pubkey.gpg')
                 fw_os_utils.run_linux_commands([
-                    'wget -O - https://vpnrepo.flexiwan.com/debian/openvpn/release/2.5/pubkey.gpg | apt-key add -',
                     f'echo "deb https://vpnrepo.flexiwan.com/debian/openvpn/release/2.5/ {distro} main" > /etc/apt/sources.list.d/openvpn-aptrepo.list'
                 ]
             )
@@ -98,17 +116,21 @@ class Application(FwApplicationInterface):
         try:
             self.log.info(f"application configurations: {str(cfg)}")
 
-            commands = [
-                'echo "%s" > /etc/openvpn/server/ca.crt' % params['caCrt'],
-                'echo "%s" > /etc/openvpn/server/server.key' % params['serverKey'],
-                'echo "%s" > /etc/openvpn/server/server.crt' % params['serverCrt'],
-                'echo "%s" > /etc/openvpn/server/tc.key' % params['tlsKey'],
-                'echo "%s" > /etc/openvpn/server/dh.pem' % params['dhKey'],
-
-                'chmod 600 /etc/openvpn/server/server.key',
+            # Write certificates and keys from Python and not by 'echo' shell
+            # command, as the latter enables shell injection and exposes
+            # the private keys in the process list. Keys are readable by root only.
+            #
+            files = [
+                ('/etc/openvpn/server/ca.crt',     params['caCrt'],     0o644),
+                ('/etc/openvpn/server/server.key', params['serverKey'], 0o600),
+                ('/etc/openvpn/server/server.crt', params['serverCrt'], 0o644),
+                ('/etc/openvpn/server/tc.key',     params['tlsKey'],    0o600),
+                ('/etc/openvpn/server/dh.pem',     params['dhKey'],     0o644),
             ]
-
-            fw_os_utils.run_linux_commands(commands)
+            for filename, content, mode in files:
+                if not isinstance(content, str):
+                    raise Exception(f'invalid content for {filename}')
+                fw_os_utils.write_private_file(filename, content + '\n', mode=mode)
 
             self._configure_server_file(params)
 
@@ -169,8 +191,31 @@ class Application(FwApplicationInterface):
             self.log.error(f"uninstall(): {str(e)}")
             raise e
 
+    def _validate_server_params(self, params):
+        """Validate parameters that are written into OpenVPN server.conf.
+        Every line of server.conf is an OpenVPN directive, so newlines
+        (e.g. injection of 'up <script>' directive) and quotes must be rejected.
+        """
+        fw_input_validation.ensure_int(params.get("port", "1194"), 'port', 1, 65535)
+        if params.get("connections") is not None:
+            fw_input_validation.ensure_int(params.get("connections"), 'connections', 1, 1000000)
+        keepalive = params.get("keepalive", "10 20")
+        if not isinstance(keepalive, str) or not re.fullmatch(r'[0-9]+ +[0-9]+', keepalive):
+            raise Exception(f'invalid keepalive {keepalive!r}')
+        fw_input_validation.ensure_int(params.get("vpnTmpTokenTime", "43200"), 'vpnTmpTokenTime', 0, 100000000)
+        for url in params.get('vpnPortalServer', []):
+            if not fw_input_validation.is_safe_string(url, forbidden='"\'`$\\ ,#;') or not url:
+                raise Exception(f'invalid vpnPortalServer {url!r}')
+        for dns_ip in params.get('dnsIps', []):
+            fw_input_validation.ensure_ip(dns_ip, 'DNS server')
+        for name in params.get('dnsDomains', []):
+            if not fw_input_validation.is_valid_fqdn(name):
+                raise Exception(f'invalid DNS domain {name!r}')
+
     def _configure_server_file(self, params):
         try:
+            self._validate_server_params(params)
+
             ip = IPNetwork(params['vpnNetwork'])
 
             vpn_portal_urls = params.get('vpnPortalServer', [])
@@ -272,7 +317,7 @@ class Application(FwApplicationInterface):
             if params['routeAllTrafficOverVpn'] is True:
                 # this directive will configure all clients to redirect their default
                 # network gateway through the VPN
-                commands.append('push \\"redirect-gateway def1 bypass-dhcp\\"')
+                commands.append('push "redirect-gateway def1 bypass-dhcp"')
             else:
                 # we are using client-connect script only if we need to send ospf routes to the client dynamically
                 commands.append('client-connect /etc/openvpn/server/client-connect.py')
@@ -280,22 +325,19 @@ class Application(FwApplicationInterface):
             # DNS options
             dns_ips = params.get('dnsIps', [])
             for ip in dns_ips:
-                commands.append(f'push \\"dhcp-option DNS {ip}\\"')
+                commands.append(f'push "dhcp-option DNS {ip}"')
 
             if dns_ips and params.get('dnsBlockOutside'):
-                commands.append('push \\"block-outside-dns\\"')
+                commands.append('push "block-outside-dns"')
 
             for name in params.get('dnsDomains', []):
-                commands.append(f'push \\"dhcp-option DOMAIN {name}\\"')
+                commands.append(f'push "dhcp-option DOMAIN {name}"')
 
-            # clean the config file
-            os.system(f' > {cfg["openvpn_server_conf_file"]}')
-
-            # run the commands
+            # write the config file from Python (and not by 'echo' shell commands)
             for command in commands:
-                ret = os.system(f'echo "{command}" >> {cfg["openvpn_server_conf_file"]}')
-                if ret:
-                    raise Exception(f'Failed to run "{command}". Error code is {ret}')
+                if fw_input_validation.has_control_chars(command):
+                    raise Exception(f'invalid server.conf line {command!r}')
+            fw_os_utils.write_private_file(cfg["openvpn_server_conf_file"], '\n'.join(commands) + '\n', mode=0o644)
 
             self.log.info('the server.conf file configured successfully')
         except Exception as e:

@@ -26,6 +26,7 @@ import sqlite3
 from sqlitedict import SqliteDict
 
 from fwobject import FwObject
+from fw_os_utils import touch_private_file
 
 
 def _decode(obj):
@@ -42,6 +43,10 @@ class FwSqliteDict(FwObject, SqliteDict):
     """This is base DB class implementation, based on SqliteDict."""
 
     def __init__(self, db_filename, table_name=None, autocommit=True):
+        # The databases might store secrets (tunnel keys, passwords, etc),
+        # so ensure they are not readable by other users.
+        if db_filename and db_filename != ':memory:':
+            touch_private_file(db_filename)
         if table_name:
             SqliteDict.__init__(self, filename=db_filename, tablename=table_name, autocommit=autocommit, encode=_encode, decode=_decode)
         else:

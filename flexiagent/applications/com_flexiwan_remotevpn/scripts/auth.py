@@ -87,8 +87,10 @@ try:
 
   data['userName'] = username
 
-  # on local setup there is no real ssl certificate and we need to call the server without verification
-  verify = False if 'local' in url else True
+  # On local (development) setup there is no real ssl certificate and we need to call
+  # the server without verification. This must be enabled explicitly by adding
+  # "setenv AUTH_SCRIPT_SKIP_TLS_VERIFY 1" to the server.conf. Never guess it by URL.
+  verify = os.getenv('AUTH_SCRIPT_SKIP_TLS_VERIFY') != '1'
 
   # send password as authorization header.
   # The server checks if this JWT is valid
@@ -96,7 +98,7 @@ try:
   response = requests.post(url, json=data, headers=headers, verify=verify)
   status = response.status_code
 
-  if status is not 200:
+  if status != 200:
     logger.info(f'Authentication for user {username} returned status code {status}')
     sys.exit(1)
   else:

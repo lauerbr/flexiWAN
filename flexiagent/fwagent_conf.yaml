@@ -2,12 +2,13 @@ agent:
   server: https://manage.flexiwan.com:443  # default: https://app.flexiwan.com:443
   token: /etc/flexiwan/agent/token.txt  # default: /etc/flexiwan/agent/token.txt
   bypass_certificate: false             # default: false
+  # token_allowed_hosts: ["*.flexiwan.com"]  # optional: hosts allowed in server/repo claims of the token (default: any, https required)
   monitor_wan:
     monitor_unassigned_interfaces: true # default: true
     servers: [1.1.1.1, 8.8.8.8]         # default: [1.1.1.1, 8.8.8.8]
     probe_timeout: 1000                 # default: 1000 msec
   debug: true                           # default: true
-  daemon_socket: 127.0.0.1:9090         # default: 127.0.0.1:9090
+  daemon_socket: /run/flexiwan/fwagent.sock  # default: /run/flexiwan/fwagent.sock (unix socket only, host:port is ignored)
   watchdog:
     deadlock:
       enabled: true                     # default: true

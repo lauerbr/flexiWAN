@@ -24,12 +24,12 @@ import fwglobals
 import fwroutes
 import fwthread
 import fwutils
+import fw_redact
 import fw_os_utils
 
 import queue
 from functools import partial
 import traceback
-import json
 import re
 
 from fwobject import FwObject
@@ -220,7 +220,7 @@ class FwMessageHandler(FwObject):
             return final_outgoing_messages
 
         except Exception as e:
-            self.log.excep(f"handle_incoming_message: {str(e)}: {json.dumps(incoming_msg) if incoming_msg else ''}")
+            self.log.excep(f"handle_incoming_message: {str(e)}: {fw_redact.dumps(incoming_msg) if incoming_msg else ''}")
             return []
 
     def thread_handle_messages_func(self, ticks):
@@ -306,11 +306,11 @@ class FwMessageHandler(FwObject):
         if msg.get('jobid'):
             log_prefix += f"job_id={msg.get('jobid')}: "
 
-        log_line = log_prefix + "request\n" + json.dumps(received_request, sort_keys=True, indent=1)
+        log_line = log_prefix + "request\n" + fw_redact.dumps(received_request, sort_keys=True, indent=1)
         self.log.debug(log_line)
 
         if received_request != fixed_request:
-            log_fixed_request = "fixed\n" + json.dumps(fixed_request, sort_keys=True, indent=1)
+            log_fixed_request = "fixed\n" + fw_redact.dumps(fixed_request, sort_keys=True, indent=1)
             self.log.debug(log_fixed_request)
 
         # Some requests like 'add-application' are huge, so we log them into
@@ -339,7 +339,7 @@ class FwMessageHandler(FwObject):
         if re.match('get-device-(logs|packet-traces)|exec', request.get('message',"")):
             reply = {"ok":1}
 
-        log_line = log_prefix + "reply\n" + json.dumps(reply, sort_keys=True, indent=1, cls=fwutils.FwJsonEncoder)
+        log_line = log_prefix + "reply\n" + fw_redact.dumps(reply, sort_keys=True, indent=1, cls=fwutils.FwJsonEncoder)
         self.log.debug(log_line)
         if logger:
             logger.debug(log_line)

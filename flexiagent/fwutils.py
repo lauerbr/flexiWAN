@@ -33,6 +33,8 @@ import linecache
 import os
 import platform
 import re
+import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -48,6 +50,7 @@ from configparser import ConfigParser
 from netaddr import IPAddress, IPNetwork
 from urllib.parse import urlparse
 
+import fw_input_validation
 import fw_os_utils
 import fwglobals
 import fwlte
@@ -99,8 +102,8 @@ def get_device_logs(file, num_of_lines):
         if not os.path.exists(file):
             return []
 
-        cmd = "tail -{} {}".format(num_of_lines, file)
-        res = subprocess.check_output(cmd, shell=True).decode().splitlines()
+        num_of_lines = fw_input_validation.ensure_int(num_of_lines, 'number of lines', 0, 100000000)
+        res = subprocess.check_output(['tail', '-n', str(num_of_lines), file]).decode().splitlines()
 
         # On zero matching, res is a list with a single empty
         # string which we do not want to return to the caller
@@ -117,18 +120,16 @@ def get_device_packet_traces(num_of_packets, timeout):
     :returns: Array of traces.
     """
     try:
-        cmd = 'sudo vppctl clear trace'
-        subprocess.check_call(cmd, shell=True)
-        cmd = 'sudo vppctl show vmxnet3'
-        shif_vmxnet3 = subprocess.check_output(cmd, shell=True).decode()
-        if shif_vmxnet3 == '':
-            cmd = 'sudo vppctl trace add dpdk-input %s && sudo vppctl trace add virtio-input %s' % (num_of_packets, num_of_packets)
-        else:
-            cmd = 'sudo vppctl trace add vmxnet3-input %s && sudo vppctl trace add virtio-input %s' % (num_of_packets, num_of_packets)
-        subprocess.check_call(cmd, shell=True)
-        time.sleep(int(timeout))
-        cmd = 'sudo vppctl show trace max {}'.format(num_of_packets)
-        res = subprocess.check_output(cmd, shell=True).decode().splitlines()
+        num_of_packets = str(fw_input_validation.ensure_int(num_of_packets, 'number of packets', 1, 1000000))
+        timeout        = fw_input_validation.ensure_int(timeout, 'timeout', 0, 86400)
+
+        subprocess.check_call(['sudo', 'vppctl', 'clear', 'trace'])
+        shif_vmxnet3 = subprocess.check_output(['sudo', 'vppctl', 'show', 'vmxnet3']).decode()
+        input_node = 'dpdk-input' if shif_vmxnet3 == '' else 'vmxnet3-input'
+        subprocess.check_call(['sudo', 'vppctl', 'trace', 'add', input_node, num_of_packets])
+        subprocess.check_call(['sudo', 'vppctl', 'trace', 'add', 'virtio-input', num_of_packets])
+        time.sleep(timeout)
+        res = subprocess.check_output(['sudo', 'vppctl', 'show', 'trace', 'max', num_of_packets]).decode().splitlines()
         # skip first line (contains unnecessary information header)
         return res[1:] if res != [''] else []
     except (OSError, subprocess.CalledProcessError) as err:
@@ -272,7 +273,7 @@ def get_default_route(if_name=None, resolve_dev_id=True):
 
 def get_gateway_arp_entries(gw):
     try:
-        out = subprocess.check_output(f'ip neigh show to {gw}', shell=True).decode()
+        out = subprocess.check_output(['ip', 'neigh', 'show', 'to', str(gw)]).decode()
         return out.splitlines()
     except Exception as e:
         fwglobals.log.error(f'get_gateway_arp({gw}): failed to fetch arp for gateway. {str(e)}')
@@ -3159,8 +3160,12 @@ def connect_to_wifi(params):
             os.system('sudo killall wpa_supplicant')
             time.sleep(3)
 
-        # create config file
-        subprocess.check_call('wpa_passphrase %s %s | sudo tee /etc/wpa_supplicant.conf' % (essid, password), shell=True)
+        # create config file. Run wpa_passphrase without shell and reject control
+        # characters to prevent injection of shell commands or config lines.
+        fw_input_validation.ensure_no_control_chars(essid, 'essid')
+        fw_input_validation.ensure_no_control_chars(password, 'password')
+        wpa_conf = subprocess.check_output(['wpa_passphrase', essid, password])
+        fw_os_utils.write_private_file('/etc/wpa_supplicant.conf', wpa_conf)
 
         try:
             subprocess.check_call('wpa_supplicant -i %s -c /etc/wpa_supplicant.conf -D wext -B -C /var/run/wpa_supplicant' % interface_name, shell=True)
@@ -3413,6 +3418,18 @@ allowed_vtysh_outputs = [
     'For this router-id change to take effect, save config and restart ospfd\n',
     'For this router-id change to take effect, use "clear ip ospf process" command\n'
 ]
+def frr_validate_command(command):
+    """Ensure FRR command can't be used to inject other commands or to escape
+    into shell. Raises exception if command is not valid.
+    """
+    if not isinstance(command, str) or fw_input_validation.has_control_chars(command):
+        raise Exception(f"invalid FRR command {command!r}: control characters are not allowed")
+    words = command.split()
+    if words and words[0] == 'do':
+        words = words[1:]
+    if words and words[0] in ['start-shell', 'sh-shell']:
+        raise Exception(f"invalid FRR command {command!r}: shell access is not allowed")
+
 def frr_vtysh_run(commands, restart_frr=False, wait_after=None, on_error_commands=[], forgive_errors=False):
     '''Run vtysh command to configure router
 
@@ -3429,8 +3446,20 @@ def frr_vtysh_run(commands, restart_frr=False, wait_after=None, on_error_command
             frr_vtysh_run(on_error_commands, restart_frr, on_error_commands=[]) # on_error_commands= empty list to prevent infinite loop
             fwglobals.log.debug(f"frr_vtysh_run: revert finished")
     try:
-        shell_commands = ' -c '.join(map(lambda x: '"%s"' % x, commands))
-        vtysh_cmd = f'sudo /usr/bin/vtysh -c "configure" -c {shell_commands}'
+        # The commands might include values received from flexiManage, e.g. BGP
+        # password, route filter description or custom routing commands.
+        # So we don't use shell and pass every command as a separate argument
+        # to vtysh. vtysh treats newlines in the -c argument as command separator,
+        # so reject control characters to prevent injection of other commands.
+        #
+        vtysh_argv = ['sudo', '/usr/bin/vtysh', '-c', 'configure']
+        for command in commands:
+            frr_validate_command(command)
+            vtysh_argv += ['-c', command]
+        vtysh_cmd = ' '.join(shlex.quote(arg) for arg in vtysh_argv)  # for logging only
+
+        p = subprocess.Popen(vtysh_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        (out, err) = p.communicate()
 
         # If frr restart is needed or if router was already started, flush down
         # the frr configuration into file, next frr restart will load it from the file.
@@ -3439,10 +3468,7 @@ def frr_vtysh_run(commands, restart_frr=False, wait_after=None, on_error_command
         # Instead we will do that only once from within _on_start_router_after().
         #
         if restart_frr or fwglobals.g.router_api.state_is_started() == True:
-            vtysh_cmd += (' ; sudo /usr/bin/vtysh -c "write" > /dev/null')
-
-        p = subprocess.Popen(vtysh_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        (out, err) = p.communicate()
+            subprocess.run(['sudo', '/usr/bin/vtysh', '-c', 'write'], stdout=subprocess.DEVNULL)
         # Note, vtysh cli prints errors/warnings to STDOUT.
         # If no errors/warnings, "out" is empty string.
         if out:
@@ -3523,8 +3549,11 @@ def frr_setup_config():
     subprocess.check_call('sudo sed -i -E "s/^service integrated-vtysh-config/no service integrated-vtysh-config/" %s' % (fwglobals.g.FRR_VTYSH_FILE), shell=True)
 
     # Setup basics on frr.conf.
+    # The vty password protects telnet access to FRR daemons. vtysh uses unix
+    # sockets and does not need it, so use random password instead of the
+    # well-known default "zebra".
     frr_commands = [
-        "password zebra",
+        f"password {secrets.token_hex(16)}",
         f"log file {fwglobals.g.FRR_LOG_FILE} notifications",
         "log stdout notifications",
         "log syslog notifications"
@@ -3987,12 +4016,14 @@ def exec(cmd, timeout=60, logger=None):
     """Runs bash command and return result in format suitable for
     fwcfg_request_handler (see _parse_result() function for details).
 
-    :param cmd: bash command
+    :param cmd: bash command string, or list of arguments (argv) to be run
+                without shell. Use the list if command includes untrusted values.
 
     :returns: tuple of (<boolean success>, <output/error string>)
     """
     try:
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        use_shell = not isinstance(cmd, (list, tuple))
+        p = subprocess.Popen(cmd, shell=use_shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         (out, err) = p.communicate(timeout=timeout)
         ok = bool(p.returncode == 0)
         if ok:
@@ -4267,6 +4298,8 @@ def set_ip_on_bridge_bvi_interface(bridge_addr, dev_id, is_add):
     :returns: (True, None) tuple on success, (False, <error string>) on failure.
     """
     try:
+        if not fw_input_validation.is_valid_network(bridge_addr):
+            return (False, f'invalid bridge address {bridge_addr!r}')
         tap = bridge_addr_to_bvi_tap(bridge_addr)
         if not tap:
             return (False, 'tap is not found for bvi interface')

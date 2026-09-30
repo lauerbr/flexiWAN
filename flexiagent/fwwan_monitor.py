@@ -26,6 +26,9 @@ import time
 
 from urllib import parse as uparse
 
+import subprocess
+
+import fw_input_validation
 import fwglobals
 import fwnetplan
 import fwpppoe
@@ -171,8 +174,19 @@ class FwWanMonitorRoute(fwroutes.FwRoute):
     def check_connectivity(self):
         server_address = self.get_next_server()
         timestamp      = time.time()
-        cmd = f"fping {server_address} -C 1 -q -R -I {self.dev} -t {self.probe_timeout} 2>&1"
-        (ok, output) = fwutils.exec(cmd)
+        # The server and timeout come from the link monitor configuration,
+        # so run fping without shell and validate them to avoid injection.
+        output = ''
+        if fw_input_validation.is_valid_ping_host(server_address) and \
+           fw_input_validation.is_valid_int(self.probe_timeout, 0):
+            cmd = ['fping', server_address, '-C', '1', '-q', '-R', '-I', str(self.dev), '-t', str(self.probe_timeout)]
+            try:
+                output = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        universal_newlines=True, timeout=60).stdout
+            except Exception as e:
+                output = str(e)
+        else:
+            self.log.debug(f"WAN Monitor: invalid server {server_address!r} or timeout {self.probe_timeout!r}")
 
         new_rtt = 0.0
         rows = output.strip().splitlines()

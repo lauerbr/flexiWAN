@@ -26,6 +26,7 @@ import subprocess
 import re
 import fwglobals
 import fwutils
+import fw_input_validation
 import fw_os_utils
 
 def configure_hostapd(dev_id, configuration):
@@ -139,6 +140,8 @@ def configure_hostapd(dev_id, configuration):
             security_mode = config.get('securityMode', 'wpa2-psk')
 
             if security_mode == "wep":
+                if '"' in str(config.get('password', 'fwrouter_ap')):
+                    raise Exception('double quote is not allowed in WEP key')
                 data['wep_default_key']       = 1
                 data['wep_key1']              = '"%s"' % config.get('password', 'fwrouter_ap')
                 data['wep_key_len_broadcast'] = 5
@@ -160,11 +163,20 @@ def configure_hostapd(dev_id, configuration):
                 data['wpa_pairwise']   = 'TKIP CCMP'
                 data['rsn_pairwise']   = 'CCMP'
 
-            with open(fwglobals.g.HOSTAPD_CONFIG_DIRECTORY + f'hostapd_{band}_{fwglobals.config.exec_file_suffix}.conf', 'w+') as f:
-                txt = ''
-                for key in data:
-                    txt += '%s=%s\n' % (key, data[key])
+            # hostapd.conf is a list of 'key=value' lines, so newlines and other
+            # control characters in values (e.g. SSID or password) would enable
+            # injection of arbitrary hostapd directives.
+            txt = ''
+            for key in data:
+                value = str(data[key])
+                if fw_input_validation.has_control_chars(value):
+                    raise Exception(f'invalid value of {key}: control characters are not allowed')
+                txt += '%s=%s\n' % (key, value)
 
+            # The file contains WiFi password, so make it readable by root only
+            filename = fwglobals.g.HOSTAPD_CONFIG_DIRECTORY + f'hostapd_{band}_{fwglobals.config.exec_file_suffix}.conf'
+            fd = fw_os_utils.open_private_file(filename, flags=os.O_RDWR | os.O_CREAT | os.O_TRUNC, mode=0o600)
+            with os.fdopen(fd, 'w+') as f:
                 fwutils.file_write_and_flush(f, txt)
 
         return (True, None)

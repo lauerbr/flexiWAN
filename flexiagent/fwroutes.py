@@ -24,6 +24,7 @@ import subprocess
 import time
 import traceback
 
+import fw_input_validation
 import fwglobals
 import fwpppoe
 import fwthread
@@ -587,6 +588,14 @@ def add_remove_route(addr, via=None, metric=None, remove=False, dev_id=None, pro
     add    = not remove
     metric = int(metric) if metric else 0
 
+    # The parameters are used in 'ip route' command line, so validate them.
+    if addr != 'default' and not fw_input_validation.is_valid_network(addr):
+        return (False, f"add_remove_route: invalid address {addr!r}")
+    if via and not fw_input_validation.is_valid_ip(via):
+        return (False, f"add_remove_route: invalid gateway {via!r}")
+    if not fw_input_validation.is_shell_safe_word(str(proto)):
+        return (False, f"add_remove_route: invalid proto {proto!r}")
+
     if dev_id and not dev:
         dev = fwutils.dev_id_to_linux_if_name(dev_id, support_unassigned_dev_id=True)
         if not dev:
@@ -599,6 +608,9 @@ def add_remove_route(addr, via=None, metric=None, remove=False, dev_id=None, pro
         return (True, None)
 
     pppoe = fwpppoe.is_pppoe_interface(dev_id=dev_id)
+    if dev and not fw_input_validation.is_valid_ifname(dev):
+        return (False, f"add_remove_route: invalid device {dev!r}")
+
     if via and not pppoe:  # PPPoE interfaces can use any peer in the world as a GW, so escape sanity checks for it
         if not on_link and not fwutils.linux_check_gateway_exist(via):
             return (True, None)
@@ -675,7 +687,7 @@ def add_remove_route(addr, via=None, metric=None, remove=False, dev_id=None, pro
 
     try:
         fwglobals.log.debug(cmd)
-        subprocess.check_call(cmd, shell=True)
+        subprocess.check_call(cmd.split())   # all parameters were validated to be single words
     except Exception as e:
         if cmd.startswith('ip route del'):
             fwglobals.log.debug(f"'{cmd}' failed: {e}, ignore this error")
