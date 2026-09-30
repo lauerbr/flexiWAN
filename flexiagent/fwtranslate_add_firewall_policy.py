@@ -312,17 +312,14 @@ def setup_wan_acl_attachments_cmd(attachments, global_ingress_keys):
 
 def exec_vpp_acl_attach_api(config):
     """
-    Execute VPP API to attach ACLs to an interface
+    Execute VPP API to attach ACLs to an interface.
+    Note the function is referenced by name in the stored command lists.
 
     :param config: API configuration parameters
     :type config: dict
     :raises Exception: Raises exception if VPP API command execution fails
     """
-    rv = fwglobals.g.router_api.vpp_api.vpp.call (config['api'], **config['params'])
-    retval = getattr(rv, 'retval') if rv else None
-    if retval and retval != 0:
-        raise Exception (f'Executing VPP ACL Attach API failed {rv}, {config}')
-    fwglobals.log.debug(f'Executed VPP ACL Attach API - rv: {rv}, {config}')
+    fw_nat_command_helpers.exec_vpp_api_config(config, 'ACL Attach')
 
 def vpp_attach_acls (sw_if_index, ingress_keys, egress_keys, handler, firewall):
     """

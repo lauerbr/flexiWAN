@@ -57,80 +57,55 @@ class Fwlog:
             date = datetime.today().strftime('%b %d %H:%M:%S') + ': '
         return date
 
-    def excep(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
-        """Print exception message.
+    def _log_message(self, log_message, to_terminal, to_syslog, print_bt, min_level=None, prefix='', suffix='', **kwargs):
+        """Redacts the message and logs it, if the logger level is not lower than 'min_level'.
 
         :param log_message:       Message contents.
         :param to_terminal:       Print to terminal.
         :param to_syslog:         Print to syslog.
         :param print_bt:          Print backtrace after the log_message. For debugging.
+        :param min_level:         The message is logged only if logger level is equal or above it.
+                                  If None, the message is always logged.
+        :param prefix:            The prefix to be added to the message, e.g. "error: ".
+        :param suffix:            The suffix to be added to the message.
+        :param kwargs:            Additional arguments for _log(), e.g. truncate_long_line.
 
         :returns: None.
         """
-        self._log("excep: " + redact_str(log_message), to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
+        if min_level is not None and self.level < min_level:
+            return
+        self._log(prefix + redact_str(log_message) + suffix, to_terminal, to_syslog, print_bt=print_bt, **kwargs)
+
+    # The excep(), error(), warning(), info(), debug() and trace() methods have
+    # same parameters:
+    #   :param log_message:       Message contents.
+    #   :param to_terminal:       Print to terminal.
+    #   :param to_syslog:         Print to syslog.
+    #   :param print_bt:          Print backtrace after the log_message. For debugging.
+    #
+    def excep(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
+        """Print exception message."""
+        self._log_message(log_message, to_terminal, to_syslog, print_bt, prefix="excep: ", truncate_long_line=False)
 
     def error(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
-        """Print error message.
-
-        :param log_message:       Message contents.
-        :param to_terminal:       Print to terminal.
-        :param to_syslog:         Print to syslog.
-        :param print_bt:          Print backtrace after the log_message. For debugging.
-
-        :returns: None.
-        """
-        self._log("error: " + redact_str(log_message), to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
+        """Print error message."""
+        self._log_message(log_message, to_terminal, to_syslog, print_bt, prefix="error: ", truncate_long_line=False)
 
     def warning(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
-        """Print warning message.
-
-        :param log_message:       Message contents.
-        :param to_terminal:       Print to terminal.
-        :param to_syslog:         Print to syslog.
-        :param print_bt:          Print backtrace after the log_message. For debugging.
-
-        :returns: None.
-        """
-        self._log("*** warning: " + redact_str(log_message) + " ***", to_terminal, to_syslog, truncate_long_line=False, print_bt=print_bt)
+        """Print warning message."""
+        self._log_message(log_message, to_terminal, to_syslog, print_bt, prefix="*** warning: ", suffix=" ***", truncate_long_line=False)
 
     def info(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
-        """Print info message.
-
-        :param log_message:       Message contents.
-        :param to_terminal:       Print to terminal.
-        :param to_syslog:         Print to syslog.
-        :param print_bt:          Print backtrace after the log_message. For debugging.
-
-        :returns: None.
-        """
-        if self.level >= FWLOG_LEVEL_INFO:
-            self._log(redact_str(log_message), to_terminal, to_syslog, print_bt=print_bt)
+        """Print info message."""
+        self._log_message(log_message, to_terminal, to_syslog, print_bt, min_level=FWLOG_LEVEL_INFO)
 
     def debug(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
-        """Print debug message.
-
-        :param log_message:       Message contents.
-        :param to_terminal:       Print to terminal.
-        :param to_syslog:         Print to syslog.
-        :param print_bt:          Print backtrace after the log_message. For debugging.
-
-        :returns: None.
-        """
-        if self.level >= FWLOG_LEVEL_DEBUG:
-            self._log(redact_str(log_message), to_terminal, to_syslog, print_bt=print_bt)
+        """Print debug message."""
+        self._log_message(log_message, to_terminal, to_syslog, print_bt, min_level=FWLOG_LEVEL_DEBUG)
 
     def trace(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
-        """Print debug message.
-
-        :param log_message:       Message contents.
-        :param to_terminal:       Print to terminal.
-        :param to_syslog:         Print to syslog.
-        :param print_bt:          Print backtrace after the log_message. For debugging.
-
-        :returns: None.
-        """
-        if self.level >= FWLOG_LEVEL_TRACE:
-            self._log(redact_str(log_message), to_terminal, to_syslog, print_bt=print_bt)
+        """Print trace message."""
+        self._log_message(log_message, to_terminal, to_syslog, print_bt, min_level=FWLOG_LEVEL_TRACE)
 
     def is_debug_enabled(self):
         """Returns True if debug messages are logged. Use it to avoid building

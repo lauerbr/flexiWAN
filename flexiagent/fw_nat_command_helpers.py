@@ -216,19 +216,34 @@ def get_vpp_1to1_nat_params (is_add, sw_if_index, external_ip_address, local_ip_
     return config, revert_config
 
 
-def exec_vpp_nat_api (config):
+def exec_vpp_api_config (config, api_descr):
     """
-    Execute the given VPP NAT API with the given parameters
+    Execute the VPP API with parameters, described by the configuration built
+    by the get_vpp_X_params() helpers.
 
     :param config: Configuration with the VPP API and its parameters
     :type config: dict
+    :param api_descr: Description of the API for logs, e.g. 'NAT'
+    :type api_descr: str
     :raises Exception: Raises exception if the VPP API call fails
     """
     rv = fwglobals.g.router_api.vpp_api.vpp.call (config['api'], **config['params'])
     retval = getattr(rv, 'retval') if rv else None
     if retval and retval != 0:
-        raise Exception (f'Executing VPP NAT API failed {rv} - {str(config)}')
-    fwglobals.log.debug(f'Executed VPP NAT API {rv} - {str(config)}')
+        raise Exception (f'Executing VPP {api_descr} API failed {rv} - {str(config)}')
+    fwglobals.log.debug(f'Executed VPP {api_descr} API {rv} - {str(config)}')
+
+
+def exec_vpp_nat_api (config):
+    """
+    Execute the given VPP NAT API with the given parameters.
+    Note the function is referenced by name in the stored command lists.
+
+    :param config: Configuration with the VPP API and its parameters
+    :type config: dict
+    :raises Exception: Raises exception if the VPP API call fails
+    """
+    exec_vpp_api_config(config, 'NAT')
 
 
 def get_add_nat_address_command(dev_id, nat_ip_list):
