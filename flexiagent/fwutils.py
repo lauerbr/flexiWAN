@@ -3159,8 +3159,12 @@ def connect_to_wifi(params):
             os.system('sudo killall wpa_supplicant')
             time.sleep(3)
 
-        # create config file
-        subprocess.check_call('wpa_passphrase %s %s | sudo tee /etc/wpa_supplicant.conf' % (essid, password), shell=True)
+        # create config file. Run wpa_passphrase without shell and reject control
+        # characters to prevent injection of shell commands or config lines.
+        fw_input_validation.ensure_no_control_chars(essid, 'essid')
+        fw_input_validation.ensure_no_control_chars(password, 'password')
+        wpa_conf = subprocess.check_output(['wpa_passphrase', essid, password])
+        fw_os_utils.write_private_file('/etc/wpa_supplicant.conf', wpa_conf)
 
         try:
             subprocess.check_call('wpa_supplicant -i %s -c /etc/wpa_supplicant.conf -D wext -B -C /var/run/wpa_supplicant' % interface_name, shell=True)
@@ -4008,12 +4012,14 @@ def exec(cmd, timeout=60, logger=None):
     """Runs bash command and return result in format suitable for
     fwcfg_request_handler (see _parse_result() function for details).
 
-    :param cmd: bash command
+    :param cmd: bash command string, or list of arguments (argv) to be run
+                without shell. Use the list if command includes untrusted values.
 
     :returns: tuple of (<boolean success>, <output/error string>)
     """
     try:
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        use_shell = not isinstance(cmd, (list, tuple))
+        p = subprocess.Popen(cmd, shell=use_shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         (out, err) = p.communicate(timeout=timeout)
         ok = bool(p.returncode == 0)
         if ok:

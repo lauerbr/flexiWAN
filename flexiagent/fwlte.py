@@ -22,11 +22,13 @@ import copy
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 import traceback
 from datetime import datetime, timedelta
 
+import fw_input_validation
 import fw_os_utils
 import fwglobals
 import fwnetplan
@@ -108,7 +110,11 @@ class FwLinuxModem(FwObject):
 
     def _mmcli_exec(self, flag, json_format=True):
         # -J at the end tells modem manager to return output in JSON format
-        success, output = fwutils.exec(f'mmcli {flag} {"-J" if json_format else ""}')
+        # Run mmcli without shell to prevent injection of shell commands.
+        argv = ['mmcli'] + (list(flag) if isinstance(flag, (list, tuple)) else shlex.split(flag))
+        if json_format:
+            argv.append('-J')
+        success, output = fwutils.exec(argv)
         if not success:
             raise Exception(output)
 
@@ -299,9 +305,10 @@ class FwLinuxModem(FwObject):
             raise Exception("modem not in QMI mode")
 
         try:
-            qmicli_cmd = f'qmicli --device=/dev/{self.usb_device} --device-open-proxy {cmd}'
-            self.log.debug(f"_run_qmicli_command: {qmicli_cmd}")
-            output = subprocess.check_output(qmicli_cmd, shell=True, stderr=subprocess.STDOUT).decode()
+            qmicli_argv = ['qmicli', f'--device=/dev/{self.usb_device}', '--device-open-proxy'] + \
+                          (list(cmd) if isinstance(cmd, (list, tuple)) else shlex.split(cmd))
+            self.log.debug(f"_run_qmicli_command: {' '.join(qmicli_argv)}")
+            output = subprocess.check_output(qmicli_argv, stderr=subprocess.STDOUT).decode()
             if not output:
                 self.log.debug('_run_qmicli_command: no output from command')
                 return ([], None)
@@ -316,15 +323,17 @@ class FwLinuxModem(FwObject):
         if self.mode != 'MBIM':
             raise Exception("modem not in MBIM mode")
         try:
-            mbimcli_cmd = f'mbimcli --device=/dev/{self.usb_device} --device-open-proxy {cmd}'
-            if '--attach-packet-service' in mbimcli_cmd:
+            # Run mbimcli without shell to prevent injection of shell commands.
+            mbimcli_argv = ['mbimcli', f'--device=/dev/{self.usb_device}', '--device-open-proxy'] + \
+                           (list(cmd) if isinstance(cmd, (list, tuple)) else shlex.split(cmd))
+            if '--attach-packet-service' in mbimcli_argv:
                 # This command might take a long or even get stuck.
                 # Hence, send SIGTERM after 10 seconds.
                 # '-k 5' is to ensure that SIGTERM is not handled and ignored by the service
                 # and it sends SIGKILL if process doesn't terminate after 5 second
-                mbimcli_cmd = f'timeout -k 5 10 {mbimcli_cmd}'
+                mbimcli_argv = ['timeout', '-k', '5', '10'] + mbimcli_argv
 
-            output = subprocess.check_output(mbimcli_cmd, shell=True, stderr=subprocess.STDOUT).decode()
+            output = subprocess.check_output(mbimcli_argv, stderr=subprocess.STDOUT).decode()
             if not output:
                 self.log.debug('_run_mbimcli_command: no output from command')
                 return ([], None)
@@ -335,7 +344,22 @@ class FwLinuxModem(FwObject):
                 self.log.error(f'_run_mbimcli_command({cmd}): err={err_str}')
             raise Exception(err_str)
 
+    def _validate_connection_params(self, apn=None, user=None, password=None, auth=None):
+        """Validate LTE connection parameters received from flexiManage.
+        The mbimcli '--connect' option uses comma separated 'key=value' list,
+        and APN is used in AT command within double quotes.
+        """
+        if apn:
+            fw_input_validation.ensure_safe_string(apn, 'LTE APN', forbidden='"\'`$\\ ,;=')
+        if user:
+            fw_input_validation.ensure_safe_string(user, 'LTE user', forbidden=',')
+        if password:
+            fw_input_validation.ensure_safe_string(password, 'LTE password', forbidden=',')
+        if auth and not re.fullmatch(r'[A-Za-z0-9_-]+', str(auth)):
+            raise ValueError(f"invalid LTE auth '{auth!r}'")
+
     def _prepare_connection_params(self, apn=None, user=None, password=None, auth=None):
+        self._validate_connection_params(apn, user, password, auth)
         connection_params = ['ip-type=ipv4'] # ask for IPv4 only. Available options are ipv4, ipv6, ipv4v6
         if apn:
             connection_params.append(f'apn={apn}')
@@ -403,6 +427,7 @@ class FwLinuxModem(FwObject):
             # do not raise error as it not mandatory for most of ISPs
 
     def connect(self, apn=None, user=None, password=None, auth=None):
+        self._validate_connection_params(apn, user, password, auth)
         if apn:
             self._ensure_pdp_context(apn)
 
@@ -417,7 +442,7 @@ class FwLinuxModem(FwObject):
             if err:
                 raise Exception(err)
 
-        lines, err = self._run_mbimcli_command(f'--connect={connection_params}')
+        lines, err = self._run_mbimcli_command([f'--connect={connection_params}'])
         if err:
             raise Exception(err)
         for line in lines:
@@ -618,21 +643,27 @@ class FwLinuxModem(FwObject):
         # }
         return modem_data.get('modem')
 
+    def _ensure_pin(self, pin, name='PIN'):
+        # PIN is 4-8 digits, PUK is 8 digits
+        if not isinstance(pin, (str, int)) or isinstance(pin, bool) or not re.fullmatch(r'[0-9]{4,8}', str(pin)):
+            raise ValueError(f"invalid {name}: 4-8 digits are expected")
+        return str(pin)
+
     def _enable_pin(self, pin):
-        return self._run_pin_command(f'--enable-pin --pin={pin}')
+        return self._run_pin_command(f'--enable-pin --pin={self._ensure_pin(pin)}')
 
     def _disable_pin(self, pin):
-        return self._run_pin_command(f'--disable-pin --pin={pin}')
+        return self._run_pin_command(f'--disable-pin --pin={self._ensure_pin(pin)}')
 
     def _change_pin(self, current, new):
-        return self._run_pin_command(f'--pin={current} --change-pin={new}')
+        return self._run_pin_command(f'--pin={self._ensure_pin(current)} --change-pin={self._ensure_pin(new)}')
 
     def _unblock_pin(self, puk, new):
-        return self._run_pin_command(f'--puk={puk} --pin={new}')
+        return self._run_pin_command(f'--puk={self._ensure_pin(puk, "PUK")} --pin={self._ensure_pin(new)}')
 
     def _verify_pin(self, pin):
         self.log.debug('verifying lte pin number')
-        output, err = self._run_pin_command(f'--pin={pin}')
+        output, err = self._run_pin_command(f'--pin={self._ensure_pin(pin)}')
         if not err:
             # after verifying pin, ensure the modem is not locked
             modem_state, _ = self._get_modem_state()
@@ -1214,6 +1245,13 @@ class FwModem(FwLinuxModem):
                 return
 
             ip, gateway, dns_servers = self.get_ip_configuration()
+
+            # The values are used in shell commands below, so validate them.
+            fw_input_validation.ensure_network(ip, 'LTE IP')
+            fw_input_validation.ensure_ip(gateway, 'LTE gateway')
+            dns_servers = [s for s in (dns_servers or []) if fw_input_validation.is_valid_ip(s)]
+            if metric:
+                metric = str(fw_input_validation.ensure_int(metric, 'metric', 0, 4294967295))
 
             os.system(f'sudo ip link set dev {self.linux_if} up && ip addr add {ip} dev {self.linux_if}')
 
