@@ -589,7 +589,7 @@ const applyTunnelAdd = async (devices, user, data) => {
     peers, topology, hub, notificationsSettings = null
   } = data.meta;
   if (notificationsSettings) {
-    for (const eventType in Object.keys(notificationsSettings)) {
+    for (const eventType of Object.keys(notificationsSettings)) {
       const { warningThreshold, criticalThreshold } = notificationsSettings[eventType];
       if (warningThreshold !== undefined && criticalThreshold !== undefined &&
         (isNaN(warningThreshold) || isNaN(criticalThreshold) ||
