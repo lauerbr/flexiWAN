@@ -128,6 +128,11 @@ def is_valid_ifname(value):
     return isinstance(value, str) and bool(_IFNAME_RE.fullmatch(value))
 
 
+def is_valid_ping_host(value):
+    """Return True if value can be safely passed to ping/fping as host argument:
+    a single word without shell special characters that is not an option."""
+    return is_shell_safe_word(value) and not value.startswith('-')
+
 def _ensure(ok, name, value, what):
     if not ok:
         raise ValueError(f"invalid {name} '{value!r}': {what} is expected")

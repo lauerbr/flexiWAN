@@ -107,6 +107,12 @@ def test_ifname():
     for bad in ["", "eth0;id", "eth 0", "eth0\n", "$(id)", None, "a" * 65]:
         assert not v.is_valid_ifname(bad), bad
 
+def test_ping_host():
+    for good in ["8.8.8.8", "google.com", "::1"]:
+        assert v.is_valid_ping_host(good), good
+    for bad in ["-f/etc/shadow", "8.8.8.8 -c 100", "8.8.8.8;id", "", None, "a\nb"]:
+        assert not v.is_valid_ping_host(bad), bad
+
 def test_ensure_helpers_raise():
     with pytest.raises(ValueError):
         v.ensure_ip("1.1.1.1;id")

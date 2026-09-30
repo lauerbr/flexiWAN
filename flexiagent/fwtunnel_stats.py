@@ -22,6 +22,7 @@ import copy
 import time
 from netaddr import *
 from subprocess import Popen, PIPE, STDOUT
+import fw_input_validation
 import fwglobals
 import fwutils
 
@@ -41,12 +42,24 @@ PING_HOST_NUM = 200
 def start_fping_process(cmd):
     """Execute a simple external command and get its output.
 
-    :param cmd:         Bash command
+    :param cmd:         Command as list of arguments. It is executed without shell,
+                        as it includes hosts and timeout from link monitor configuration.
 
     :returns: Command execution result.
     """
-    process = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True, universal_newlines=True)
+    process = Popen(cmd, stdout=PIPE, stderr=PIPE, universal_newlines=True)
     return process
+
+def _build_fping_cmd(hosts, timeout, interface=None):
+    """Build fping argv. Invalid hosts (which might be interpreted by fping as
+    options) are skipped and invalid timeout is replaced with default one."""
+    hosts = [h for h in hosts if fw_input_validation.is_valid_ping_host(h)]
+    if not fw_input_validation.is_valid_int(timeout, 0):
+        timeout = fwglobals.g.cfg.WAN_MONITOR_PROBE_TIMEOUT
+    cmd = ['fping'] + hosts + ['-C', '1', '-q', '-t', str(timeout)]
+    if interface is not None:
+        cmd += ['-I', str(interface)]
+    return cmd
 
 def peer_stats_get_ping_time(tunnels):
     """Use fping to get RTT.
@@ -75,8 +88,7 @@ def peer_stats_get_ping_time(tunnels):
         if not hosts:
             continue
 
-        cmd = "fping %s -C 1 -q -t %s" % (" ".join(hosts), timeout)
-        cmd += " -I %s" % interface
+        cmd = _build_fping_cmd(hosts, timeout, interface)
         if tunnel_id in fping_processes:
             if fping_processes[tunnel_id].poll() is not None:
                 (output, errors) = fping_processes[tunnel_id].communicate()
@@ -118,7 +130,8 @@ def tunnel_stats_get_ping_time(tunnels):
     tunnels_keys = list(tunnels.keys())
 
     for i in range(0, len(tunnels_keys), PING_HOST_NUM):
-        cmd = "fping %s -C 1 -q -t %s" % (" ".join(tunnels_keys[i:i+PING_HOST_NUM]), fwglobals.g.cfg.WAN_MONITOR_PROBE_TIMEOUT)
+        hosts = " ".join(tunnels_keys[i:i+PING_HOST_NUM]).split()
+        cmd = _build_fping_cmd(hosts, fwglobals.g.cfg.WAN_MONITOR_PROBE_TIMEOUT)
 
         # use tunnel_id from first element of hosts butch as process_id
         process_id = tunnels[tunnels_keys[i]]
