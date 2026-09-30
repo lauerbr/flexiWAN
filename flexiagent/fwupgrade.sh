@@ -28,6 +28,11 @@ APT_SOURCE_REGEXP="^deb[ \t]+\[[ \t]*arch=(.+)[ \t]*\][ \t]+(http.*)/(.+)[ \t]+(
 APT_URL_REGEXP="(http|https)://[a-zA-Z0-9./?=_%:-]*"
 SW_REPOSITORY="$(grep -Eoh "$APT_SOURCE_REGEXP" $APT_SOURCE_FILES | head -1 | cut -d '/' -f3 )"
 SW_REPOSITORY_GPG_KEY="$(grep -Eoh "$APT_SOURCE_REGEXP" $APT_SOURCE_FILES | head -1 | grep -Eoh "$APT_URL_REGEXP")/gpgkey/flexiwan.ng.source.gpg.key"
+# SHA-1 fingerprint (40 hex digits, no spaces) of the repository signing key.
+# If set, the key downloaded from the repository is verified against it before
+# it is added to apt. SECURITY: set this to the real fingerprint of the flexiWAN
+# repository key - without it the key is trusted on the basis of HTTPS only.
+SW_REPOSITORY_GPG_KEY_FINGERPRINT=""
 AGENT_CHECK_TIMEOUT=360
 APT_LOCK_TIMEOUT=60
 SCRIPT_NAME="$(basename $BASH_SOURCE)"
@@ -49,7 +54,7 @@ log() {
 
 update_jobs_db() {
     log "$1": "$2"
-    fwagent configure jobs update --job_id $JOB_ID --request 'upgrade-device-sw' --command "$1" --job_error "$2"
+    fwagent configure jobs update --job_id "$JOB_ID" --request 'upgrade-device-sw' --command "$1" --job_error "$2"
 }
 
 handle_upgrade_failure() {
@@ -149,7 +154,7 @@ update_service_conf_file() {
 }
 
 check_connection_to_sw_repo() {
-    ping -c 1 $SW_REPOSITORY >> /dev/null 2>&1
+    ping -c 1 "$SW_REPOSITORY" >> /dev/null 2>&1
     if [ ${PIPESTATUS[0]} != 0 ]; then
         return 1
     fi
@@ -157,11 +162,35 @@ check_connection_to_sw_repo() {
 }
 
 apt_key_add() {
+    # The key is fetched from the repository it signs, so at least require
+    # HTTPS to prevent the key substitution by network attacker.
+    case "$SW_REPOSITORY_GPG_KEY" in
+        https://*) ;;
+        *)  log "apt_key_add: refuse to fetch GPG key over non-HTTPS URL: $SW_REPOSITORY_GPG_KEY"
+            return 1 ;;
+    esac
+
+    local key_dir
+    key_dir="$(mktemp -d)" || return 1
+    local key_file="$key_dir/repo.gpg.key"
     if [ -x /usr/bin/curl ]; then
-        curl -s $SW_REPOSITORY_GPG_KEY | apt-key add - 2>/dev/null
+        curl -fsS --proto '=https' -o "$key_file" "$SW_REPOSITORY_GPG_KEY"
     else
-        wget -qO $SW_REPOSITORY_GPG_KEY | apt-key add - 2>/dev/null
+        wget -q --https-only -O "$key_file" "$SW_REPOSITORY_GPG_KEY"
     fi
+    local ret=$?
+    if [ $ret == 0 ] && [ -n "$SW_REPOSITORY_GPG_KEY_FINGERPRINT" ]; then
+        if ! gpg --with-colons --show-keys "$key_file" 2>/dev/null | grep -q "^fpr:::::::::${SW_REPOSITORY_GPG_KEY_FINGERPRINT}:"; then
+            log "apt_key_add: fingerprint of $SW_REPOSITORY_GPG_KEY does not match $SW_REPOSITORY_GPG_KEY_FINGERPRINT"
+            ret=1
+        fi
+    fi
+    if [ $ret == 0 ]; then
+        apt-key add "$key_file" > /dev/null 2>&1
+        ret=$?
+    fi
+    rm -rf "$key_dir"
+    return $ret
 }
 
 #######################################

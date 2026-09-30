@@ -23,6 +23,8 @@
 import json
 import os
 import psutil
+import shlex
+import tempfile
 import subprocess
 import sys
 import traceback
@@ -36,6 +38,7 @@ import fwutils
 import fwlte
 import fwwifi
 import fwroutes
+import fw_input_validation
 import fw_os_utils
 
 from fwobject import FwObject
@@ -131,21 +134,28 @@ class FWAGENT_API(FwObject):
         """
         dir = os.path.dirname(os.path.realpath(__file__))
 
-        # Copy the fwupgrade.sh file to the /tmp folder to
+        version = params.get('version')
+        if not fw_input_validation.is_valid_debian_version(version):
+            return { 'message': f'Invalid version {version!r}', 'ok': 0 }
+
+        # Copy the fwupgrade.sh file to the private temporary folder to
         # prevent overriding it with the fwupgrade.sh file
         # from the new version.
         try:
-            copyfile('{}/fwupgrade.sh'.format(dir), '/tmp/fwupgrade.sh')
+            script = os.path.join(tempfile.mkdtemp(prefix='fwupgrade-'), 'fwupgrade.sh')
+            copyfile('{}/fwupgrade.sh'.format(dir), script)
         except Exception as e:
             return { 'message': 'Failed to copy upgrade file', 'ok': 0 }
 
         job_id = fwglobals.g.jobs.current_job_id
-        cmd = 'bash /tmp/fwupgrade.sh {} {} {} {} {} >> {} 2>&1 &' \
-            .format(params['version'], fwglobals.g.VERSIONS_FILE, \
+        cmd = 'bash {} {} {} {} {} {} >> {} 2>&1 &' \
+            .format(*[shlex.quote(str(arg)) for arg in [
+                    script,
+                    version, fwglobals.g.VERSIONS_FILE, \
                     fwglobals.g.CONN_FAILURE_FILE, \
                     fwglobals.g.ROUTER_LOG_FILE, \
                     job_id, \
-                    fwglobals.g.ROUTER_LOG_FILE)
+                    fwglobals.g.ROUTER_LOG_FILE]])
         os.system(cmd)
         return { 'message': 'Started software upgrade process', 'ok': 1 }
 
@@ -175,20 +185,22 @@ class FWAGENT_API(FwObject):
 
         dir = os.path.dirname(os.path.realpath(__file__))
 
-        # Copy the {script_name} file to the /tmp folder to
+        # Copy the {script_name} file to the private temporary folder to
         # prevent overriding it with the {script_name} file
         # from the new version.
         try:
-            copyfile('{}/tools/{}'.format(dir, script_name), '/tmp/{}'.format(script_name))
+            script = os.path.join(tempfile.mkdtemp(prefix='fwupgrade-'), script_name)
+            copyfile('{}/tools/{}'.format(dir, script_name), script)
         except Exception as e:
             return { 'message': 'Failed to copy linux upgrade file', 'ok': 0 }
 
         job_id = fwglobals.g.jobs.current_job_id
-        cmd = 'bash /tmp/{} {} {} >> {} 2>&1 &' \
-            .format(script_name, \
+        cmd = 'bash {} {} {} >> {} 2>&1 &' \
+            .format(*[shlex.quote(str(arg)) for arg in [
+                    script, \
                     fwglobals.g.ROUTER_LOG_FILE, \
                     job_id, \
-                    fwglobals.g.ROUTER_LOG_FILE)
+                    fwglobals.g.ROUTER_LOG_FILE]])
         self.log.info(f"_upgrade_linux_sw: Running Linux upgrade from {codename}, command={cmd}")
         os.system(cmd)
         return { 'message': 'Started linux upgrade process', 'ok': 1 }

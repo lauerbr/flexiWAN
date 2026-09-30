@@ -101,8 +101,8 @@ def get_device_logs(file, num_of_lines):
         if not os.path.exists(file):
             return []
 
-        cmd = "tail -{} {}".format(num_of_lines, file)
-        res = subprocess.check_output(cmd, shell=True).decode().splitlines()
+        num_of_lines = fw_input_validation.ensure_int(num_of_lines, 'number of lines', 0, 100000000)
+        res = subprocess.check_output(['tail', '-n', str(num_of_lines), file]).decode().splitlines()
 
         # On zero matching, res is a list with a single empty
         # string which we do not want to return to the caller
@@ -119,18 +119,16 @@ def get_device_packet_traces(num_of_packets, timeout):
     :returns: Array of traces.
     """
     try:
-        cmd = 'sudo vppctl clear trace'
-        subprocess.check_call(cmd, shell=True)
-        cmd = 'sudo vppctl show vmxnet3'
-        shif_vmxnet3 = subprocess.check_output(cmd, shell=True).decode()
-        if shif_vmxnet3 == '':
-            cmd = 'sudo vppctl trace add dpdk-input %s && sudo vppctl trace add virtio-input %s' % (num_of_packets, num_of_packets)
-        else:
-            cmd = 'sudo vppctl trace add vmxnet3-input %s && sudo vppctl trace add virtio-input %s' % (num_of_packets, num_of_packets)
-        subprocess.check_call(cmd, shell=True)
-        time.sleep(int(timeout))
-        cmd = 'sudo vppctl show trace max {}'.format(num_of_packets)
-        res = subprocess.check_output(cmd, shell=True).decode().splitlines()
+        num_of_packets = str(fw_input_validation.ensure_int(num_of_packets, 'number of packets', 1, 1000000))
+        timeout        = fw_input_validation.ensure_int(timeout, 'timeout', 0, 86400)
+
+        subprocess.check_call(['sudo', 'vppctl', 'clear', 'trace'])
+        shif_vmxnet3 = subprocess.check_output(['sudo', 'vppctl', 'show', 'vmxnet3']).decode()
+        input_node = 'dpdk-input' if shif_vmxnet3 == '' else 'vmxnet3-input'
+        subprocess.check_call(['sudo', 'vppctl', 'trace', 'add', input_node, num_of_packets])
+        subprocess.check_call(['sudo', 'vppctl', 'trace', 'add', 'virtio-input', num_of_packets])
+        time.sleep(timeout)
+        res = subprocess.check_output(['sudo', 'vppctl', 'show', 'trace', 'max', num_of_packets]).decode().splitlines()
         # skip first line (contains unnecessary information header)
         return res[1:] if res != [''] else []
     except (OSError, subprocess.CalledProcessError) as err:
