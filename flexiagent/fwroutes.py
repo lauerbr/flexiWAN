@@ -33,8 +33,9 @@ import fwutils
 
 from fwcfg_request_handler import FwCfgMultiOpsWithRevert
 from fwobject import FwObject
-from pyroute2 import IPRoute
-from pyroute2.netlink.exceptions import NetlinkError
+
+# The pyroute2 is imported on demand, as it takes ~100 msec to import it,
+# and most of 'fwagent' CLI commands don't need it.
 
 routes_protocol_map = {
     -1: '',
@@ -114,6 +115,7 @@ class FwRoute(FwObject):
         return err_str
 
     def _uninstall(self):
+        from pyroute2 import IPRoute
         try:
             with IPRoute() as ipr:
                 ipr.route("del", dst=self.prefix, priority=self.metric)
@@ -467,6 +469,9 @@ class FwLinuxRoutes(dict):
         return self
 
     def _linux_get_routes(self, prefix=None, preference=None, via=None, proto=None):
+        from pyroute2 import IPRoute
+        from pyroute2.netlink.exceptions import NetlinkError
+
         if not proto:
             proto_id = None
         else:

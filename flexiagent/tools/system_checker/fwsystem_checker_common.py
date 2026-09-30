@@ -25,7 +25,6 @@ import json
 import os
 import psutil
 import re
-import ruamel.yaml
 import subprocess
 import sys
 import uuid
@@ -332,6 +331,7 @@ class Checker:
                 choice = input(prompt + "use %s ? [Y/n]: " % new_uuid)
                 if choice != 'y' and choice != 'Y' and choice != '':
                     return False
+            import ruamel.yaml  # imported on demand as it is used here only
             f = open(self.CFG_AGENT_CONF_FILE, 'r')
             ruamel_yaml = ruamel.yaml.YAML()
             conf = ruamel_yaml.load(f)

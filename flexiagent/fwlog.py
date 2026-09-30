@@ -133,6 +133,12 @@ class Fwlog:
         if self.level >= FWLOG_LEVEL_TRACE:
             self._log(redact_str(log_message), to_terminal, to_syslog, print_bt=print_bt)
 
+    def is_debug_enabled(self):
+        """Returns True if debug messages are logged. Use it to avoid building
+        expensive debug messages that are not going to be logged anyway.
+        """
+        return self.level >= FWLOG_LEVEL_DEBUG
+
     def set_level(self, level):
         """Set severity level to show messages that are above this level.
 
@@ -340,6 +346,10 @@ class FwObjectLogger:
 
     def __ne__(self, other):
         return str(self.log) != str(other.log)
+
+    def is_debug_enabled(self):
+        is_debug_enabled = getattr(self.log, 'is_debug_enabled', None)
+        return is_debug_enabled() if is_debug_enabled else True
 
     def excep(self, log_message, to_terminal=True, to_syslog=True, print_bt=False):
         self.log.excep(self.prefix + log_message, to_terminal=to_terminal, to_syslog=to_syslog, print_bt=print_bt)

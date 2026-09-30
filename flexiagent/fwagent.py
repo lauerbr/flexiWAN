@@ -72,7 +72,6 @@ import fwrouter_cfg
 import fwthread
 import fwutils
 import fwwebsocket
-import loadsimulator
 import fwqos
 from fwfirewall import FwFirewall
 
@@ -819,6 +818,13 @@ class FwAgent(FwObject):
         else:   # Take care of file with single request
             reply = _inject_single_request(requests)
             return reply
+
+def simulate(count, reconnect, delete):
+    """Handles 'fwagent simulate' command.
+    The load simulator is imported on demand only, as it is used for testing only.
+    """
+    import loadsimulator
+    return loadsimulator.simulate(count=count, reconnect=reconnect, delete=delete)
 
 def version():
     """Handles 'fwagent version' command.
@@ -1697,8 +1703,8 @@ if __name__ == '__main__':
         'stop': lambda args: stop(stop_router=(not args.dont_stop_vpp), stop_applications=(not args.dont_stop_applications)),
         'start': lambda args: start(start_router=args.start_router, start_applications=args.start_applications),
         'daemon': lambda args: daemon(debug_conf_filename=args.debug_conf_filename, agent_conf_filename=args.agent_conf_filename),
-        'simulate': lambda args: loadsimulator.simulate(count=int(args.count) if args.count is not None else 1,
-                                                        reconnect=args.reconnect, delete=args.delete),
+        'simulate': lambda args: simulate(count=int(args.count) if args.count is not None else 1,
+                                          reconnect=args.reconnect, delete=args.delete),
         'dump': lambda args: dump(filename=args.filename, path=args.path, clean_log=args.clean_log, full=args.full),
         'show': lambda args: show(
             agent=args.agent,

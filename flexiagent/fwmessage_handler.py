@@ -306,6 +306,23 @@ class FwMessageHandler(FwObject):
         if msg.get('jobid'):
             log_prefix += f"job_id={msg.get('jobid')}: "
 
+        # Some requests like 'add-application' are huge, so we log them into
+        # dedicated file. This is in addition to logging into default file,
+        # where lines are truncated to 4K.
+        #
+        logger = fwglobals.g.get_logger(fixed_request)
+
+        # Save temporary data for logging reply
+        #
+        msg.update({'log_prefix': log_prefix})
+        msg.update({'logger':     logger })
+
+        # Redacting and formatting of huge requests is expensive,
+        # so skip it if the result is not going to be logged anyway.
+        #
+        if not self.log.is_debug_enabled() and not (logger and logger.is_debug_enabled()):
+            return
+
         log_line = log_prefix + "request\n" + fw_redact.dumps(received_request, sort_keys=True, indent=1)
         self.log.debug(log_line)
 
@@ -313,26 +330,19 @@ class FwMessageHandler(FwObject):
             log_fixed_request = "fixed\n" + fw_redact.dumps(fixed_request, sort_keys=True, indent=1)
             self.log.debug(log_fixed_request)
 
-        # Some requests like 'add-application' are huge, so we log them into
-        # dedicated file. This is in addition to logging into default file,
-        # where lines are truncated to 4K.
-        #
-        logger = fwglobals.g.get_logger(fixed_request)
         if logger:
             logger.debug(log_line)
             if log_fixed_request:
                 logger.debug(log_fixed_request)
-
-        # Save temporary data for logging reply
-        #
-        msg.update({'log_prefix': log_prefix})
-        msg.update({'logger':     logger })
 
     def _log_reply(self, msg):
         request     = msg['request']
         reply       = msg['reply']
         logger      = msg['logger']
         log_prefix  = msg['log_prefix']
+
+        if not self.log.is_debug_enabled() and not (logger and logger.is_debug_enabled()):
+            return  # skip expensive formatting of reply that is not going to be logged
 
         # Mask huge or security sensitive replies
         #

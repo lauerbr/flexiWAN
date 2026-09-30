@@ -23,6 +23,7 @@ import binascii
 import copy
 import ctypes
 import datetime
+import reprlib
 import glob
 import hashlib
 import importlib
@@ -60,7 +61,6 @@ import fwpppoe
 import fwqos
 import fwfirewall
 import fwtranslate_add_switch
-import fwutils
 import fwwifi
 from fw_traffic_identification import FwTrafficIdentifications
 from fwapplications_api import call_applications_hook
@@ -88,8 +88,6 @@ fwutils_dir = os.path.dirname(os.path.realpath(__file__))
 libc = None
 
 proto_map = {'any': 0, 'icmp': 1, 'tcp': 6, 'udp': 17}
-
-dpdk = __import__('dpdk-devbind')
 
 def get_device_logs(file, num_of_lines):
     """Get device logs.
@@ -1300,7 +1298,7 @@ def pci_bytes_to_str(pci_bytes):
     return "%04x:%02x:%02x.%02x" % (domain, bus, slot, function)
 
 def dev_id_to_bvi_sw_if_index(dev_id):
-    bridge_addr = fwutils.is_bridged_interface(dev_id)
+    bridge_addr = is_bridged_interface(dev_id)
     if not bridge_addr:
         return None
 
@@ -1910,6 +1908,8 @@ def stop_vpp():
      """
 
     call_applications_hook('on_router_is_stopping')
+
+    dpdk = importlib.import_module('dpdk-devbind')   # it is used here only, so import on demand
 
     dpdk_ifs = []
     dpdk.devices = {}
@@ -3375,7 +3375,7 @@ def is_non_dpdk_interface(dev_id):
         return True
     if fwlte.is_lte_interface_by_dev_id(dev_id):
         return True
-    if fwutils.is_vlan_interface(dev_id=dev_id):
+    if is_vlan_interface(dev_id=dev_id):
         return True
 
     # PPPoE uses dpdk interface - we push PPPoE traffic sourced by/designated to Linux into/from VPP
@@ -5090,6 +5090,11 @@ def get_kernel_interfaces(linux_if_name=None, sys_class_net_lines=None):
 
     return devices
 
+_backtrace_arg_repr = reprlib.Repr()
+_backtrace_arg_repr.maxlevel  = 3
+_backtrace_arg_repr.maxstring = 256
+_backtrace_arg_repr.maxother  = 256
+
 def get_backtrace(thread_id, substr=""):
     '''Dumps current backtrace of the thread with 'thread_id' value of 'thread.ident' property,
     while adding name and value of all arguments of dumped functions.
@@ -5126,7 +5131,9 @@ def get_backtrace(thread_id, substr=""):
         if os.path.dirname(filename).startswith(fwutils_dir):
             args, _, _, values  = inspect.getargvalues(thread_frame)
             if args:
-                arg_hash = sum([hash(repr(values[arg])) for arg in args])
+                # Use size limited repr() together with object identity, as full
+                # repr() of huge arguments (e.g. configuration requests) is expensive.
+                arg_hash = sum([hash((id(values[arg]), _backtrace_arg_repr.repr(values[arg]))) for arg in args])
 
         thread_frame_str = rf"{filename}:{lineno}, in {function}(arg_hash={arg_hash}): {line_at_lineno}"
         bt.append(thread_frame_str)
