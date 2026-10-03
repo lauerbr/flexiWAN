@@ -1,0 +1,59 @@
+[
+{
+  "entity": "agent",
+  "message": "start-router",
+  "params": {
+    "interfaces": [
+      "__INTERFACE_1__",
+      "__INTERFACE_2__"
+    ],
+    "routes": [
+      {
+        "dev_id":"__INTERFACE_1__dev_id",
+        "addr": "__INTERFACE_1__addr"
+      },
+      {
+        "dev_id":"__INTERFACE_2__dev_id",
+        "addr":"__INTERFACE_2__addr",
+        "routing":"ospf"
+      },
+      {
+        "dev_id":"0000:00:88.00",
+        "addr": "__INTERFACE_1__addr"
+      }
+    ]
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "remove-route",
+  "params": [
+    {
+      "dev_id":"__INTERFACE_1__dev_id",
+      "addr": "__INTERFACE_1__addr"
+    },
+    {
+      "dev_id":"__INTERFACE_2__dev_id",
+      "addr":"__INTERFACE_2__addr",
+      "routing":"ospf"
+    }
+  ]
+}
+,
+{
+  "entity": "agent",
+  "message": "remove-interface",
+  "params": [
+    {
+      "dev_id":"__INTERFACE_1__dev_id",
+      "addr": "__INTERFACE_1__addr"
+    },
+    {
+      "dev_id":"__INTERFACE_2__dev_id",
+      "addr":"__INTERFACE_2__addr",
+      "routing":"ospf"
+    }
+  ]
+}
+]

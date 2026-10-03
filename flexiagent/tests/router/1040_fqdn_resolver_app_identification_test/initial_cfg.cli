@@ -1,0 +1,48 @@
+[
+{
+  "entity":  "agent",
+  "message": "start-router",
+  "params": {
+    "interfaces": [
+      {
+        "dev_id":  "__INTERFACE_1__dev_id",
+        "addr":    "",
+        "gateway": "",
+        "type":"wan",
+        "dhcp": "yes",
+        "multilink": {
+            "labels": [
+                "green",
+                "blue",
+                "red"]
+        }
+      },
+      "__INTERFACE_2__"
+    ]
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-application",
+  "params": {
+    "applications": [
+      {
+        "name": "fleximanage",
+        "id": "1",
+        "category": "management",
+        "serviceClass": "oam",
+        "importance": "medium",
+        "description": "Echo Protocol",
+        "rules": [
+          {
+            "fqdn": "fakedomainfakedomain.com",
+            "ports": []
+          }
+        ],
+        "modified": false
+      }
+    ]
+  }
+}
+]

@@ -1,0 +1,46 @@
+{
+  "entity": "agent",
+  "message": "aggregated",
+  "params": {
+    "requests": [
+		{
+		  "entity":  "agent",
+		  "message": "add-interface",
+		  "params": {
+			  "dev_id":"__INTERFACE_2__dev_id",
+			  "addr":"__INTERFACE_2__addr",
+		      "routing":"ospf",
+		      "type":"lan"
+		  }
+		}
+		,
+		{
+		  "entity": "agent",
+		  "message": "remove-multilink-policy",
+		  "params": {
+			"id": "aaaabbbbcccc",
+			"rules": [
+			  {
+				"id": "1",
+				"priority": 0,
+				"classification": {
+				  "prefix": {
+					"ip": "4.4.4.4/32",
+					"ports": "5060",
+					"protocol": "udp"
+				  }
+				},
+				"action": {
+				  "links": [
+					{
+					  "pathlabels": [ "orange" ]
+					}
+				  ]
+				}
+			  }
+			]
+		  }
+		}
+	]
+  }
+}

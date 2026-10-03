@@ -1,0 +1,536 @@
+#! /usr/bin/python3
+
+################################################################################
+# flexiWAN SD-WAN software - flexiEdge, flexiManage.
+# For more information go to https://flexiwan.com
+#
+# Copyright (C) 2019  flexiWAN Ltd.
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+################################################################################
+
+
+# This script collects various information about FlexiWAN Edge device, e.g.
+# configuration of router, fwagent logs, interface configuration in Linux, etc.
+# Every piece of data is dumped into dedicated file in temporary folder,
+# than whole folder is tar-ed and is zipped.
+
+import signal
+def fwdump_signal_handler(signum, frame):
+    """Handle SIGINT (CTRL+C) to suppress backtrace print onto screen,
+	   when invoked by user from command line and not as a daemon.
+       Do it ASAP, so CTRL+C in the middle of importing the third-parties
+       will not cause the backtrace to print.
+	"""
+    exit(1)
+signal.signal(signal.SIGINT, fwdump_signal_handler)
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+agent_root_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)) , '..')
+sys.path.append(agent_root_dir)
+import fwutils
+import fwglobals
+from fw_vpp_coredump_utils import vpp_coredump_copy_cores
+from fwobject import FwObject
+import fwapplications_api
+import fwlte
+import fw_os_utils
+
+g_dumpers = None
+
+def init_global_variables():
+
+    # Special variables in the dumper commands are substituted in run time as follows:
+    #   <dumper_out_file> -> '<temporary_folder>/<dumper>.log'
+    #   <temp_folder>     -> current folder or --temp_folder script argument
+
+    global g_dumpers
+    g_dumpers = {
+        ############################################################################
+        # Linux stuff - !!! PLEASE KEEP ALPHABET ORDER !!!
+        #
+        'linux_apt':                    { 'shell_cmd': 'mkdir -p <temp_folder>/linux_apt/ && ' +
+                                                    'cp /var/log/apt/*.log <temp_folder>/linux_apt 2>/dev/null ; ' +
+                                                    'cp /var/log/apt/*.log.1.gz <temp_folder>/linux_apt 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_autosense':              { 'shell_cmd': 'mkdir -p <temp_folder>/linux_autosense/etc/default && ' +
+                                                    'cp -rf /etc/networkd-dispatcher <temp_folder>/linux_autosense/etc/ 2>/dev/null ; ' +
+                                                    'cp /etc/default/networkd-dispatcher <temp_folder>/linux_autosense/etc/default/ 2>/dev/null ; ' +
+                                                    'systemctl cat networkd-dispatcher.service > <temp_folder>/linux_autosense/networkd-dispatcher.service.cat.txt 2>/dev/null ; ' +
+                                                    'systemctl show networkd-dispatcher.service > <temp_folder>/linux_autosense/networkd-dispatcher.service.show.txt 2>/dev/null ; ' +
+                                                    'systemctl status networkd-dispatcher.service > <temp_folder>/linux_autosense/networkd-dispatcher.service.status.txt 2>/dev/null ; ' +
+                                                    'cp /var/log/flexiwan/autosense.log <temp_folder>/linux_autosense 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_brctl':                  { 'shell_cmd': 'brctl show > <dumper_out_file>' },
+        'linux_cpu':                    { 'shell_cmd': 'cat /proc/cpuinfo > <dumper_out_file>' },
+        'linux_dhcpd':                  { 'shell_cmd': 'mkdir -p <temp_folder>/linux_dhcpd/ && ' +
+                                                    'cp /etc/kea/*.conf* <temp_folder>/linux_dhcpd 2>/dev/null ; ' +
+                                                    f'cp {fwglobals.g.DHCP_LOG_FILE} <temp_folder>/linux_dhcpd 2>/dev/null ; ' +
+                                                    f'cp {fwglobals.g.KEA_DHCP_LEASE_DB_FILE} <temp_folder>/linux_dhcpd 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_disk':                   { 'shell_cmd': 'df -h > <dumper_out_file>' },
+
+        'linux_dist_upgrade':           { 'shell_cmd': 'mkdir -p <temp_folder>/linux_dist_upgrade/ && ' +
+                                                    'cp /var/log/dist-upgrade/* <temp_folder>/linux_dist_upgrade 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_dpdk_devbind_status':    { 'shell_cmd': 'dpdk-devbind -s > <dumper_out_file>' },
+        'linux_grub':                   { 'shell_cmd': 'cp /etc/default/grub <temp_folder>/linux_grub.log 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_hardware':               { 'shell_cmd': 'dmidecode > <dumper_out_file>' },
+        'linux_interfaces':             { 'shell_cmd': 'ip addr > <dumper_out_file>' },
+        'linux_wifi':                   { 'shell_cmd': 'iwconfig > <dumper_out_file> 2>/dev/null ;' },
+        'linux_lsb_release':            { 'shell_cmd': 'cp /etc/lsb-release <temp_folder>/linux_lsb-release.log 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_lspci':                  { 'shell_cmd': 'lspci -Dvmmn > <dumper_out_file>' },
+        'linux_lspci_vnn':              { 'shell_cmd': 'lspci -vnn > <dumper_out_file>' },
+        'linux_meminfo':                { 'shell_cmd': 'cat /proc/meminfo > <dumper_out_file>' },
+        'linux_neighbors':              { 'shell_cmd': 'ip neigh > <dumper_out_file>' },
+        'linux_netplan':                { 'shell_cmd': 'mkdir -p <temp_folder>/linux_netplan/etc/ && ' +
+                                                    'cp /etc/netplan/*yaml* <temp_folder>/linux_netplan/etc 2>/dev/null && ' +
+                                                    'mkdir -p <temp_folder>/linux_netplan/lib/ && ' +
+                                                    'cp /lib/netplan/*yaml* <temp_folder>/linux_netplan/lib 2>/dev/null ; ' +
+                                                    'mkdir -p <temp_folder>/linux_netplan/run/ && ' +
+                                                    'cp /run/netplan/*yaml* <temp_folder>/linux_netplan/run 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_pidof_vpp':              { 'shell_cmd': 'echo "vpp: $(pidof vpp)" > <dumper_out_file>; ' +
+                                                    'echo "vppctl: $(pidof vppctl)" >> <dumper_out_file>; '},
+        'linux_pppoe':                  { 'shell_cmd': 'mkdir -p <temp_folder>/linux_pppoe/etc/ && ' +
+                                                    'cp -r /etc/ppp/ <temp_folder>/linux_pppoe/etc 2>/dev/null && ' +
+                                                    'true',         # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+                                        },
+        'linux_ps':                     { 'shell_cmd': 'ps -ww -elf > <dumper_out_file>' },
+        'linux_ram':                    { 'shell_cmd': 'free > <dumper_out_file>' },
+        'linux_resolvconf':             { 'shell_cmd': 'mkdir -p <temp_folder>/linux_resolvconf/ && ' +
+                                                    'cp /etc/resolv.conf <temp_folder>/linux_resolvconf 2>/dev/null ; ' +
+                                                    'cp /etc/resolvconf/resolv.conf.d/base   <temp_folder>/linux_resolvconf 2>/dev/null ; ' +
+                                                    'cp /etc/resolvconf/resolv.conf.d/head   <temp_folder>/linux_resolvconf 2>/dev/null ; ' +
+                                                    'cp /etc/resolvconf/resolv.conf.d/tail   <temp_folder>/linux_resolvconf 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_systemd_resolved_conf':  { 'shell_cmd': 'cp /etc/systemd/resolved.conf <temp_folder>/systemd_resolved.conf 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_systemd_resolved_conf_orig':  { 'shell_cmd': 'cp /etc/systemd/resolved.conf.orig <temp_folder>/systemd_resolved.conf.orig 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_systemd_resolved_status': { 'shell_cmd': 'systemd-resolve --status > <temp_folder>/systemd_resolved.status.log 2>/dev/null ; ' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_routes':                 { 'shell_cmd': 'ip route > <dumper_out_file>' },
+        'linux_sys_class_net':          { 'shell_cmd': 'ls -l /sys/class/net/ > <dumper_out_file>' },
+        'linux_syslog':                 { 'shell_cmd': 'mkdir -p <temp_folder>/logs && ' +
+                                                    'cp /var/log/syslog <temp_folder>/logs/syslog.log 2>/dev/null ;' + # add "*.log" to have "open with" association on Windows
+                                                    'cp /var/log/syslog.1 <temp_folder>/logs/ 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_uuid':                   { 'shell_cmd': 'cp /sys/class/dmi/id/product_uuid <temp_folder>/linux_uuid.log 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+
+        ############################################################################
+        # VPP related stuff in Linux - !!! PLEASE KEEP ALPHABET ORDER !!!
+        #
+        'linux_vpp_api_trace':          { 'shell_cmd': 'cp /tmp/*%s <temp_folder>/ 2>/dev/null ;' % fwglobals.g.VPP_TRACE_FILE_EXT +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'linux_vpp_startup_conf':       { 'shell_cmd': 'mkdir -p <temp_folder>/vpp_startup_conf && cp /etc/vpp/* <temp_folder>/vpp_startup_conf/ 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+
+        ############################################################################
+        # FRR stuff - !!! PLEASE KEEP ALPHABET ORDER !!!
+        #
+        'frr_conf':                     { 'shell_cmd': 'mkdir -p <temp_folder>/frr && cp /etc/frr/* <temp_folder>/frr/ 2>/dev/null' },
+        'frr_bgp_summary':              { 'shell_cmd': f'vtysh -c "show bgp summary" > <temp_folder>/frr/frr_bgp_summary.json 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'frr_ip_bgp':                   { 'shell_cmd': f'vtysh -c "show ip bgp" > <temp_folder>/frr/frr_ip_bgp.log 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+
+        'frr_ip_route':                 { 'shell_cmd': f'vtysh -c "show ip route json" > <temp_folder>/frr/frr_ip_route.json 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'frr_log':                      { 'shell_cmd': f'cp {fwglobals.g.FRR_LOG_FILE} <temp_folder>/frr/frr.log 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'frr_ospf_neighbors':           { 'shell_cmd': f'vtysh -c "show ip ospf neighbor all json" > <temp_folder>/frr/frr_ip_ospf_neighbors.json 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'frr_ospf_database':            { 'shell_cmd': f'vtysh -c "show ip ospf database" > <temp_folder>/frr/frr_ip_ospf_database.log 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+
+        ############################################################################
+        # flexiEdge agent stuff - !!! PLEASE KEEP ALPHABET ORDER !!!
+        #
+        'fwagent_cache':                { 'shell_cmd': 'fwagent show --agent cache > <dumper_out_file>' },
+        'fwagent_conf':                 { 'shell_cmd': 'mkdir -p <temp_folder>/fwagent && ' +
+                                                    'cp -r /etc/flexiwan/agent/. <temp_folder>/fwagent/ 2>/dev/null' },
+        'fwagent_device_signature':     { 'shell_cmd': 'fwagent show --configuration signature > <dumper_out_file>' },
+        'fwagent_logs': 				{ 'shell_cmd': 'mkdir -p <temp_folder>/logs && ' +
+                                                    'cp /var/log/flexiwan/agent.log  <temp_folder>/fwagent.log 2>/dev/null ;' + # save latest log into root folder for convenience
+                                                    'cp /var/log/flexiwan/*.log      <temp_folder>/logs/ 2>/dev/null ;' +
+                                                    'cp /var/log/flexiwan/*.log.1    <temp_folder>/logs/ 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'dpkg_log':                     { 'shell_cmd': 'mkdir -p <temp_folder>/logs && ' +
+                                                    'cp /var/log/dpkg.log* <temp_folder>/logs/ 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'hostapd.log':                  { 'shell_cmd': 'mkdir -p <temp_folder>/logs && ' +
+                                                    f'cp {fwglobals.g.HOSTAPD_LOG_FILE} <temp_folder>/logs/hostapd.log 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+        'hostapd.log.backup':           { 'shell_cmd': 'mkdir -p <temp_folder>/logs && ' +
+                                                    f'cp {fwglobals.g.HOSTAPD_LOG_FILE_BACKUP} <temp_folder>/logs/hostapd.log.backup 2>/dev/null ;' +
+                                                    'true' },       # Add 'true' to avoid error status code returned by shell_cmd if file does not exists
+
+        'fwagent_db_applications':      { 'shell_cmd': 'fwagent show --database applications > <dumper_out_file>' },
+        'fwagent_db_frr':               { 'shell_cmd': 'fwagent show --database frr > <dumper_out_file>' },
+        'fwagent_db_general':           { 'shell_cmd': 'fwagent show --database general > <dumper_out_file>' },
+        'fwagent_db_multilink':         { 'shell_cmd': 'fwagent show --database multilink > <dumper_out_file>' },
+        'fwagent_qos':                  { 'shell_cmd': 'fwagent show --database qos > <dumper_out_file>' },
+        'fwagent_firewall':             { 'shell_cmd': 'fwagent show --database firewall > <dumper_out_file>' },
+        'fwagent_multilink_cfg':        { 'shell_cmd': 'fwagent show --configuration multilink-policy > <dumper_out_file>' },
+        'fwagent_router_cfg':           { 'shell_cmd': 'fwagent show --configuration router > <dumper_out_file>' },
+        'fwagent_router_pending_cfg':   { 'shell_cmd': 'fwagent show --configuration router-pending > <dumper_out_file>' },
+        'fwagent_system_configuration': { 'shell_cmd': 'fwagent show --configuration system > <dumper_out_file>' },
+        'fwagent_jobs':                 { 'shell_cmd': 'fwagent show --database jobs > <dumper_out_file>' },
+
+        'fwagent_threads':              { 'shell_cmd': 'fwagent show --agent threads > <dumper_out_file>' },
+        'fwagent_version':              { 'shell_cmd': 'fwagent version > <dumper_out_file>' },
+
+        ############################################################################
+        # VPP stuff - !!! PLEASE KEEP ALPHABET ORDER !!!
+        #
+        'vpp_acl_dump':                 { 'shell_cmd': 'echo acl_dump > vat.txt && vpp_api_test script in vat.txt > <dumper_out_file> 2>&1 ; rm -rf vat.txt' },
+        'vpp_acl_plugin_interface_acl': { 'shell_cmd': 'vppctl show acl-plugin interface > <dumper_out_file>' },
+        'vpp_acl_plugin_lookup_context':{ 'shell_cmd': 'vppctl show acl-plugin lookup context > <dumper_out_file>' },
+        'vpp_acl_plugin_sessions':      { 'shell_cmd': 'vppctl show acl-plugin sessions > <dumper_out_file>' },
+        'vpp_acl_plugin_tables':        { 'shell_cmd': 'vppctl show acl-plugin tables > <dumper_out_file>' },
+        'vpp_adj':                      { 'shell_cmd': 'vppctl sh adj > <dumper_out_file>' },
+        'vpp_bridge':                   { 'shell_cmd': 'vppctl sh bridge > <dumper_out_file>' },
+        'vpp_buffers':                  { 'shell_cmd': 'vppctl sh buffers > <dumper_out_file>' },
+        'vpp_default_gateways':         { 'shell_cmd': 'vppctl sh ip fib 0.0.0.0/0 > <dumper_out_file>' },
+        'vpp_ike_profile':              { 'shell_cmd': 'vppctl sh ike profile > <dumper_out_file>' },
+        'vpp_ike_sa':                   { 'shell_cmd': 'vppctl sh ike sa details > <dumper_out_file>' },
+        'vpp_interfaces_addresses':     { 'shell_cmd': 'vppctl sh int addr > <dumper_out_file>' },
+        'vpp_interfaces_hw':            { 'shell_cmd': 'vppctl sh hard > <dumper_out_file>' },
+        'vpp_interfaces_rx_placement':  { 'shell_cmd': 'vppctl sh int rx > <dumper_out_file>' },
+        'vpp_interfaces_sw':            { 'shell_cmd': 'vppctl sh int > <dumper_out_file>' },
+        'vpp_interfaces_vmxnet3':       { 'shell_cmd': 'vppctl sh vmxnet3 > <dumper_out_file>' },
+        'vpp_ipip_tunnel':              { 'shell_cmd': 'vppctl sh ipip tunnel > <dumper_out_file>' },
+        'vpp_ipsec_sa':                 { 'shell_cmd': 'vppctl sh ipsec sa > <dumper_out_file>' },
+        'vpp_ipsec_tunnel':             { 'shell_cmd': 'vppctl sh ipsec tunnel > <dumper_out_file>' },
+        'vpp_fib':                      { 'shell_cmd': 'vppctl sh ip fib > <dumper_out_file>' },
+        'vpp_fib_entries':              { 'shell_cmd': 'vppctl sh fib entry > <dumper_out_file>' },
+        'vpp_fib_paths':                { 'shell_cmd': 'vppctl sh fib paths > <dumper_out_file>' },
+        'vpp_fib_pathlists':            { 'shell_cmd': 'vppctl sh fib path-lists > <dumper_out_file>' },
+        'vpp_fwabf_labels':             { 'shell_cmd': 'vppctl sh fwabf label > <dumper_out_file>' },
+        'vpp_fwabf_links':              { 'shell_cmd': 'vppctl sh fwabf link > <dumper_out_file>' },
+        'vpp_fwabf_policies':           { 'shell_cmd': 'vppctl sh fwabf policy > <dumper_out_file>' },
+        'vpp_fwabf_attachments':        { 'shell_cmd': 'vppctl sh fwabf attach > <dumper_out_file>' },
+        'vpp_l3xc':                     { 'shell_cmd': 'vppctl sh l3xc > <dumper_out_file>' },
+        'vpp_neighbors':                { 'shell_cmd': 'vppctl sh ip neighbors > <dumper_out_file>' },
+        'vpp_nat44_addresses':          { 'shell_cmd': 'vppctl show nat44 addresses verbose > <dumper_out_file>' },
+        'vpp_nat44_hash_tables':        { 'shell_cmd': 'vppctl show nat44 hash tables > <dumper_out_file>' },
+        'vpp_nat44_interfaces':         { 'shell_cmd': 'vppctl show nat44 interfaces > <dumper_out_file>' },
+        'vpp_nat44_interface_address':  { 'shell_cmd': 'vppctl show nat44 interface address > <dumper_out_file>' },
+        'vpp_nat44_static_mappings':    { 'shell_cmd': 'vppctl show nat44 static mappings > <dumper_out_file>' },
+        'vpp_nat44_sessions':           { 'shell_cmd': 'vppctl show nat44 sessions > <dumper_out_file>' },
+        'vpp_nat44_1to1_actions':       { 'shell_cmd': 'vppctl show nat44 1to1 acl-actions > <dumper_out_file>' },
+        'vpp_nat44_summary':            { 'shell_cmd': 'vppctl show nat44 summary > <dumper_out_file>' },
+        'vpp_tap_inject':               { 'shell_cmd': 'vppctl show tap-inject > <dumper_out_file>' },
+        'vpp_tap_inject_routes':        { 'shell_cmd': 'vppctl show tap-inject routes > <dumper_out_file>' },
+        'vpp_vrrp_vr':                  { 'shell_cmd': 'vppctl sh vrrp vr > <dumper_out_file>' },
+        'vpp_vxlan_tunnel':             { 'shell_cmd': 'vppctl sh vxlan tunnel > <dumper_out_file>' },
+        'vpp_qos_classifier_acls':      { 'shell_cmd': 'vppctl show classifier-acls > <dumper_out_file>' },
+        'vpp_qos_interface_config':     { 'shell_cmd': 'vppctl show dpdk interface hqos > <dumper_out_file>' },
+        'vpp_qos_interface_stats':      { 'shell_cmd': 'vppctl show dpdk hqos queue > <dumper_out_file>' },
+        'vpp_qos_egress_map':           { 'shell_cmd': 'vppctl show qos egress map > <dumper_out_file>' },
+        'vpp_qos_egress_mark':          { 'shell_cmd': 'vppctl show qos mark > <dumper_out_file>' },
+        'vpp_qos_show_policer':         { 'shell_cmd': 'vppctl show policer > <dumper_out_file>' },
+        'vpp_show_errors':              { 'shell_cmd': 'vppctl show errors > <dumper_out_file>' },
+    }
+
+
+class FwDump(FwObject):
+    def __init__(self, temp_folder=None, quiet=False, full_dump=False,
+                 include_all_logs=False, vpp_core_num=None):
+
+        FwObject.__init__(self)
+
+        self.temp_folder    = temp_folder
+        self.quiet          = quiet
+        self.prompt         = 'fwdump>> '
+        self.zip_file       = None
+        self.hostname       = os.uname()[1]
+        self.full_dump        = full_dump
+        self.include_all_logs = include_all_logs
+        self.vpp_core_num     = vpp_core_num
+        self.include_agent_etc = False  # include content of the agent folder - *.sqlite files, configuration, etc.
+
+        if full_dump:
+            self.include_all_logs = True
+            self.include_agent_etc = True
+            self.vpp_core_num = 3 if self.vpp_core_num is None else self.vpp_core_num
+
+        if not temp_folder:
+            timestamp = fwutils.build_timestamped_filename('')
+            self.temp_folder = os.path.join(os.getcwd(), timestamp)
+
+        # Create temporary folder
+        #
+        if os.path.exists(self.temp_folder):
+            choice = input(self.prompt + "the temporary folder '%s' exists, overwrite? [Y/n]: " % self.temp_folder) \
+                     if not self.quiet else 'y'
+            if choice == 'y' or choice == 'Y' or choice == '':
+                os.system("rm -rf %s" % self.temp_folder)   # shutil.rmtree() fails sometimes on VBox shared folders!
+                time.sleep(1)  # Give system a time to remove fd
+                os.mkdir(self.temp_folder)
+        else:
+            os.mkdir(self.temp_folder)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # The three arguments to `__exit__` describe the exception
+        # caused the `with` statement execution to fail. If the `with`
+        # statement finishes without an exception being raised, these
+        # arguments will be `None`.
+        if self.zip_file:   # If zip was created, delete temporary folder
+            os.system("rm -rf %s" % self.temp_folder)   # shutil.rmtree() fails sometimes on VBox shared folders!
+
+    def _dump(self, dumpers):
+        '''Run dumpers provided by the 'dumpers' list argument.
+        The list contains names of dumpers that serve as keys for the global
+        g_dumpers map.
+        '''
+        vpp_pid = fw_os_utils.vpp_pid()
+
+        for dumper in dumpers:
+            if not dumper in g_dumpers:
+                print(self.prompt + 'WARNING: %s dumper is not defined' % dumper)
+                continue
+            if re.match('vpp_', dumper) and not vpp_pid:
+                continue        # Escape vpp dumpers if vpp does not run
+            output_file = os.path.join(self.temp_folder, '%s.log' % dumper)
+            if os.path.exists(output_file):
+                continue        # Same dumper might be run by different modules
+            if 'shell_cmd' in g_dumpers[dumper]:
+                cmd = g_dumpers[dumper]['shell_cmd']
+                # Substitute special variables
+                cmd = re.sub('<temp_folder>', self.temp_folder, cmd)
+                cmd = re.sub('<dumper_out_file>', output_file, cmd)
+
+                # Add 'sudo' to the commands as some of them require sudo access
+                cmd = "sudo sh -c '" + cmd + "'"
+                try:
+                    subprocess.check_call(cmd, shell=True)
+                except Exception as e:
+                    print(self.prompt + 'warning: dumper %s failed, error %s' % (dumper, str(e)))
+                    continue
+            if 'python' in g_dumpers[dumper]:
+                python_func = g_dumpers[dumper]['python']['func']
+                python_args = g_dumpers[dumper]['python']['args']
+                module_name, func_name = python_func.split('.')
+
+                try:
+                    func  = getattr(__import__(module_name), func_name)
+                    func(**python_args)
+                except Exception as e:
+                    print(self.prompt + 'warning: dumper %s failed, error %s' % (dumper, str(e)))
+                    continue
+
+
+    def zip(self, name, path, add_hostname, add_timestamp):
+        self.zip_file = name
+        if add_hostname:
+            self.zip_file += f'_{self.hostname}'
+        if self.full_dump:
+            self.zip_file += '_full'
+        if add_timestamp:
+            self.zip_file = fwutils.build_timestamped_filename(self.zip_file, '.tar.gz')
+        if path:
+            self.zip_file = os.path.join(path, self.zip_file)
+
+        # The dump includes a copy of the agent folder (databases with keys, etc).
+        # Do not include the authentication tokens and make the dump accessible
+        # by the owner (root) only.
+        for secret_file in [fwglobals.config.filenames.device_token, 'token.txt']:
+            secret_path = os.path.join(self.temp_folder, 'fwagent', secret_file)
+            if os.path.exists(secret_path):
+                os.remove(secret_path)
+        os.system(f'sudo chmod -R u+rwX,go-rwx {self.temp_folder}')
+
+        cmd = 'tar -zcf %s -C %s .' % (self.zip_file, self.temp_folder)
+        try:
+            if path and not os.path.exists(path):
+                os.system('mkdir -p %s > /dev/null 2>&1' % path)
+            subprocess.check_call(cmd, shell=True)
+            os.chmod(self.zip_file, 0o600)
+        except Exception as e:
+            print(self.prompt + 'ERROR: "%s" failed: %s' % (cmd, str(e)))
+
+    def add_application_files(self):
+        try:
+            apps = fwapplications_api.call_applications_hook('get_fwdump_files')
+            for app_identifier, app_files in apps.items():
+                directory = f'<temp_folder>/applications/{app_identifier}'
+                for app_file in app_files:
+                    file_name = app_file.split('/')[-1] # get the filename out of the file full path
+                    if not os.path.exists(app_file):
+                        continue
+                    g_dumpers[file_name] = {
+                        'shell_cmd': f'mkdir -p {directory} && cat {app_file} > {directory}/{file_name}'
+                    }
+        except:
+            pass # Do not crash in case of application code error
+
+    def add_lte_files(self):
+        try:
+            dump_output_folder = f'{self.temp_folder}/lte'
+            os.system(f'mkdir -p {dump_output_folder}')
+
+            if_names_by_dev_ids = fwlte.get_if_names_by_dev_ids()
+            for dev_id in if_names_by_dev_ids:
+                if_name = if_names_by_dev_ids[dev_id]
+                file_name = f'lte_{if_name}'
+                g_dumpers[file_name] = {
+                    'python': {
+                        'func': 'fwlte.dump',
+                        'args': { 'lte_if_name': if_name, 'prefix_path': f'{dump_output_folder}/{file_name}' } }
+                }
+
+            # collect modem manager info
+            fwutils.exec_to_file(f'mmcli --list-modems -J 2>/dev/null', f'{dump_output_folder}/mmcli_list_modems.json')
+            with open(f'{dump_output_folder}/mmcli_list_modems.json', 'r') as f:
+                content = f.read()
+                if not content: # file can be empty if no modems exist in the machine
+                    return
+                output = json.loads(content)
+                for modem_path in output.get('modem-list', []):
+                    mm_modem_num = modem_path.split('/')[-1]
+                    fwutils.exec_to_file(f'mmcli -m {mm_modem_num} -J', f'{dump_output_folder}/mmcli_{mm_modem_num}.json')
+        except:
+            pass # Do not crash in case of LTE code error
+
+    def dump_all(self):
+        self.add_application_files()
+        self.add_lte_files()
+
+        dumpers = list(g_dumpers.keys())
+        self._dump(dumpers)
+        if self.include_all_logs:
+            os.system(f'mkdir -p {self.temp_folder}/logs')
+            os.system(f'cp /var/log/syslog*.gz {self.temp_folder}/logs/ 2>/dev/null')
+            os.system(f'cp /var/log/flexiwan/*.gz {self.temp_folder}/logs/ 2>/dev/null')
+
+        if self.vpp_core_num:
+            corefile_dir = self.temp_folder + "/corefiles/"
+            os.makedirs(corefile_dir)
+            vpp_coredump_copy_cores(corefile_dir, self.vpp_core_num)
+
+        if self.include_agent_etc:
+            os.system(f'mkdir -p {self.temp_folder}/fwagent')
+            os.system(f'cp -r /etc/flexiwan/agent/. {self.temp_folder}/fwagent/ 2>/dev/null')
+
+    def dump_multilink(self):
+        dumpers = [
+                    'linux_interfaces',
+                    'linux_neighbors',
+                    'linux_pidof_vpp',
+                    'linux_routes',
+                    'fwagent_log',
+                    'fwagent_log.1',
+                    'fwagent_multilink_cfg',
+                    'fwagent_router_cfg',
+                    'vpp_acl_dump',
+                    'vpp_fib_entries',
+                    'vpp_fib_paths',
+                    'vpp_fib_pathlists',
+                    'vpp_fwabf_labels',
+                    'vpp_fwabf_links',
+                    'vpp_fwabf_policies',
+                    'vpp_fwabf_attachments',
+                    'vpp_interfaces_hw',
+                    'vpp_interfaces_sw',
+                    'vpp_interfaces_addresses'
+                    ]
+        self._dump(dumpers)
+
+
+def has_sudo_permissions():
+    try:
+        cmd_out = subprocess.Popen('sudo -n true', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cmd_out.communicate()[0]
+        if cmd_out.returncode == 0:
+            return True
+    except Exception as err:
+        print(f'sudo check failed: {err}')
+    return False
+
+
+def main(args):
+    with FwDump(temp_folder=args.temp_folder, quiet=args.quiet, full_dump=args.full_dump,
+                include_all_logs=args.include_all_logs,
+                vpp_core_num=args.include_vpp_core) as dump:
+
+        if args.feature:
+            method_name = 'dump_'+ args.feature
+            feature_func = getattr(dump, method_name, None)
+            if not feature_func:
+                print(dump.prompt + "ERROR: %s feature is not supported" % args.feature)
+            else:
+                feature_func()
+        else:
+            dump.dump_all()
+
+        if args.dont_zip == False:
+            dump.zip(args.name, args.dest_folder, (not args.no_hostname), (not args.no_timestamp))
+            # 'fwutils.fwdump(...)' exploits format of this print to get full name of the archive file.
+            # Take caution while changing it!
+            print(dump.prompt + 'done: %s' % dump.zip_file)
+        else:
+            print(dump.prompt + 'done: %s' % dump.temp_folder)
+
+
+if __name__ == '__main__':
+
+    if not has_sudo_permissions():
+        print('Error: Please run the command as sudo or root')
+        exit(-1)
+
+    fwglobals.initialize()
+    init_global_variables()
+    import argparse
+    global arg
+
+    parser = argparse.ArgumentParser(description='FlexiEdge dump utility')
+    parser.add_argument('--dest_folder', default=None,
+                        help="folder where to put the resulted zip. If not specified, the current dir is used.")
+    parser.add_argument('--dont_zip', action='store_true',
+                        help="don't archive dumped data into single file. Path to folder with dumps will be printed on exit.")
+    parser.add_argument('--feature', choices=['multilink'], default=None,
+                        help="dump info related to this feature only")
+    parser.add_argument('-f', '--full', action='store_true', dest='full_dump',
+                        help="Include all possible data, overwhelming user by size of final archive. Switches ON all -iX flags.")
+    parser.add_argument('-if', '--include_all_logs', action='store_true',
+                        help="Include all available logs, like archived syslog-s")
+    parser.add_argument('-ic', '--include_vpp_core', nargs='?', const=3, type=int, choices=range(0, 4),
+                        help="Include latest VPP coredump if available. Use --include_vpp_core=X to take last X coredumps")
+    parser.add_argument('-n', '--name', default='fwdump',
+                        help="the name to be used for the final archive file. If not provided, 'fwdump' will be used.")
+    parser.add_argument('-nh', '--no_hostname', default=False,
+                        help="Don't append hostname to the filename of the final archive")
+    parser.add_argument('-nt', '--no_timestamp', default=False,
+                        help="Don't append timestamp to the filename of the final archive")
+    parser.add_argument('-q', '--quiet', action='store_true',
+                        help="silent mode, overrides existing temporary folder if was provided with --temp_folder")
+    parser.add_argument('--temp_folder', default=None,
+                        help="folder where to keep not zipped dumped info")
+    args = parser.parse_args()
+    main(args)
+    fwglobals.finalize()

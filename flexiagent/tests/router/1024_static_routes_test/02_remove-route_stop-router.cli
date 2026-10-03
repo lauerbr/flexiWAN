@@ -1,0 +1,39 @@
+[
+{
+  "entity": "agent",
+  "message": "remove-route",
+  "params": {
+    "addr": "1.1.1.0/24",
+    "via": "__INTERFACE_1__gateway",
+    "redistributeViaOSPF": false
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "remove-route",
+  "params": {
+    "addr": "1.1.1.0/24",
+    "via": "__INTERFACE_1__gateway",
+    "metric": 300,
+    "redistributeViaOSPF": false
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "remove-route",
+  "params": {
+    "addr": "1.1.1.0/24",
+    "via": "__INTERFACE_2__tamper__client",
+    "dev_id":"__INTERFACE_2__dev_id",
+    "metric": 300,
+    "redistributeViaOSPF": false
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "stop-router"
+}
+]

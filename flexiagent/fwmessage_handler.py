@@ -1,0 +1,352 @@
+#! /usr/bin/python3
+
+################################################################################
+# flexiWAN SD-WAN software - flexiEdge, flexiManage.
+# For more information go to https://flexiwan.com
+#
+# Copyright (C) 2023  flexiWAN Ltd.
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+################################################################################
+
+import fwglobals
+import fwthread
+import fwutils
+import fw_redact
+
+import queue
+import traceback
+import re
+
+from fwobject import FwObject
+
+class FwMessageHandler(FwObject):
+    """This class handles requests received from flexiManage and
+    retrieves replies for previously received requests that were processed
+    asynchronously.
+    """
+
+    def __init__(self):
+        """Constructor method.
+        """
+        FwObject.__init__(self)
+
+        self.queue_incoming_messages = queue.Queue(maxsize=100)    # 100 should be more than enough: most requests are sequential on flexiManage
+        self.queue_outgoing_messages = queue.Queue()
+        self.queue_outgoing_cli_msgs = queue.Queue()
+        self.thread_handle_messages  = fwthread.FwThread(
+                                            target=self.thread_handle_messages_func,
+                                            name='Message Receiver',
+                                            log=self.log)
+
+    def initialize(self):
+        self.thread_handle_messages.start()
+        fwthread.set_request_processing_thread(self.thread_handle_messages.ident)
+        super().initialize()
+
+    def finalize(self):
+        fwthread.unset_request_processing_thread(self.thread_handle_messages.ident)
+        self.thread_handle_messages.stop()
+        super().finalize()
+
+    def handle_incoming_message(self, incoming_msg=None):
+        """Handles request received from flexiManage.
+
+        :param incoming_msg: the received message in following format:
+                            {
+                                'seq':  12345
+                                'jobid: 6789    // optional, might not exist
+                                'msg': {
+                                    "message": "add-route",
+                                    "params": {
+                                        "addr": "9.9.9.9",
+                                        "via": "192.168.56.154",
+                                        "dev_id":"pci:0000:02:00.0"
+                                    }
+                                }
+                            }
+                            The 'incoming_msg' might be None. In that case this
+                            function just retrieves the asynchronous replies for
+                            the messages that were received earlier.
+
+                            The 'incoming_msg' can include CLI command as follows:
+                            {
+                                'seq':  12345
+                                'msg': {
+                                    "message": "cli-command",
+                                    "cli_module_name": "fwcli_configure_router"
+                                    "cli_func_name": "interfaces_create"
+                                    "params": {
+                                        "addr": "8.8.8.8/32",
+                                        "host_if_name": "test",
+                                        "type":"lan"
+                                    }
+                                }
+                            }
+
+        :returns: list of replies to be sent to flexiManage.
+                  This list might include reply to the 'incoming_msg' message,
+                  if it was processes synchronously.
+                  As well, the list might include replies for the messages
+                  received earlier that were processed asynchronously.
+                  Format of the replies in this list is as follows:
+                            {
+                                'seq': 12345
+                                'msg': {
+                                    "ok":      [0|1]
+                                    "message": <dict or error string or ''>
+                                }
+                            }
+                  In case of CLI command the reply includes 'ret' value:
+                            {
+                                'seq': 12345
+                                'msg': {
+                                    "ok":      [0|1]
+                                    "message": <error string if "ok" is 0 or ''>
+                                    "ret":     object/string returned by the CLI command
+                                }
+                            }
+        """
+        bypass_queue      = False
+        outgoing_messages = []
+        cli_message       = incoming_msg['msg']['message'] == 'cli-command' if incoming_msg else False
+
+        try:
+            if incoming_msg:
+                if cli_message:
+                    incoming_msg.update({'request': incoming_msg['msg']})  # no need to fix CLI command
+                else:
+                    incoming_msg.update({'request': fwutils.fix_received_message(incoming_msg['msg'])})
+                self._log_request(incoming_msg)
+
+                # Non configuration requests, like 'exec_timeout' are supposed
+                # to be processed quickly and should have no impact
+                # on monitoring or configuring threads, so we just inject them
+                # directly into global request handler, thus bypassing both
+                # the received message queue (self.queue_incoming_messages)
+                # and thread suspending mechanism (see self._handle_received_request()).
+                #
+                request, original_request = incoming_msg['request'], incoming_msg['msg']
+                processing = original_request.get('processing')
+                if not processing:      # load defaults if not specified explicitly in request
+                    processing = fwglobals.request_handlers.get(request.get('message',''),{}).get('processing')
+                bypass_queue = processing.get('synchronous', False) if processing else False
+                lock_system  = processing.get('exclusive', True)    if processing else True
+
+                # The request could be a CLI command injected into daemon by the daemon itself,
+                # using shell. For example, when agent handles 'start-router' request, it notifies
+                # available applications of "on_router_is_started" event. Then some application
+                # might invoke "fwagent configure ..." CLI shell process. The shell process injects
+                # serialized CLI command into running daemon. At the moment of inject, the daemon
+                # holds the system lock taken on 'start-router' processing, so the CLI processing
+                # will be blocked on this lock. On the other hand the 'start-router' processing
+                # is blocked waiting for the CLI shell process to return.
+                # To avoid deadlock we should bypass message queue and should not lock the system.
+                #
+                if request['message'] == 'cli-command' and 'cli_appl_id' in request:
+                    if fwglobals.g.applications_api.api_tracker.check(request['cli_appl_id']):
+                        bypass_queue = True
+                        lock_system  = False
+
+                self.log.debug(incoming_msg['log_prefix'] + f"bypass_queue={bypass_queue}, lock_system={lock_system}")
+
+                if bypass_queue:
+                    fwthread.set_request_processing_thread()
+                    reply = fwglobals.g.handle_request(request, original_request, lock_system)
+                    fwthread.unset_request_processing_thread()
+                    incoming_msg.update({'reply': reply})
+                    outgoing_messages.append(incoming_msg)
+                else:
+                    try:
+                        self.queue_incoming_messages.put(incoming_msg, block=cli_message, timeout=fwglobals.g.MESSAGE_HANDLER_QUEUE_TIMEOUT)
+                    except (queue.Full, Exception) as e:
+                        if isinstance(e, queue.Full):
+                            err_str = 'flexiEdge message queue is full'
+                            self.log.error(f"handle_incoming_message: {err_str}")
+                        else:
+                            err_str = f"handle_incoming_message: on pushing requests: {str(e)}"
+                            self.log.error(err_str)
+                        fwglobals.g.jobs.add_record(incoming_msg.get('jobid'), {'error': err_str})
+                        incoming_msg.update({'reply': { 'ok':0, 'message': err_str }})
+                        outgoing_messages.append(incoming_msg)
+
+            # Fetch ready-to-send replies, if we do not have one in hands already.
+            #
+            if not outgoing_messages:
+                try:
+                    if cli_message:
+                        msg = self.queue_outgoing_cli_msgs.get(block=True, timeout=fwglobals.g.MESSAGE_HANDLER_QUEUE_TIMEOUT)
+                        outgoing_messages.append(msg)
+                    else:
+                        while not fwglobals.g.router_threads.teardown:
+                            msg = self.queue_outgoing_messages.get(block=False)
+                            outgoing_messages.append(msg)
+                except queue.Empty:
+                    if cli_message:
+                        self.log.debug(f"handle_incoming_message: no response for {incoming_msg['request']} in {fwglobals.g.MESSAGE_HANDLER_QUEUE_TIMEOUT} seconds")
+                except Exception as e:
+                    err_str = f"handle_incoming_message: on popping replies: {str(e)}"
+                    if incoming_msg:
+                        fwglobals.g.jobs.add_record(incoming_msg.get('jobid'), {'error': err_str})
+                    self.log.error(err_str)
+
+            # Log replies and convert them into format expected by flexiManage
+            #
+            final_outgoing_messages = []
+            for msg in outgoing_messages:
+                self._log_reply(msg)
+
+                if not 'message' in msg['reply']:
+                    msg['reply'].update({'message': 'success'})
+                if not 'entity' in msg['reply'] and 'entity' in msg['request']:
+                    msg['reply'].update({'entity': msg['request']['entity'] + 'Reply'})
+                final_msg = {'seq': msg['seq'], 'msg': msg['reply']}
+
+                final_outgoing_messages.append(final_msg)
+            return final_outgoing_messages
+
+        except Exception as e:
+            self.log.excep(f"handle_incoming_message: {str(e)}: {fw_redact.dumps(incoming_msg) if incoming_msg else ''}")
+            return []
+
+    def thread_handle_messages_func(self, ticks):
+
+        while not fwglobals.g.router_threads.teardown:
+            try:
+                msg = self.queue_incoming_messages.get_nowait()
+                try:
+                    fwglobals.g.jobs.start_recording(msg.get('jobid'), msg['request'])
+                except Exception as e:
+                    err_str = f"thread_handle_messages_func failed to start job recording: {str(e)}"
+                    self.log.error(err_str)
+                try:
+                    msg['reply'] = self._handle_received_request(msg['request'], msg['msg'])
+                except Exception as e:
+                    err_str = f"thread_handle_messages_func: {str(e)} {traceback.format_exc()}"
+                    self.log.error(err_str)
+                    msg['reply'] = {'ok':0, 'message': {'errors' : [err_str]}}
+                    try:
+                        fwglobals.g.jobs.update_job_error(err_str)
+                    except Exception as e:
+                        err_str = f"thread_handle_messages_func failed to update job error: {str(e)}"
+                        self.log.error(err_str)
+                fwglobals.g.jobs.stop_recording(msg.get('jobid'), msg['reply'])
+
+                if msg['request']['message'] == "cli-command":
+                    self.queue_outgoing_cli_msgs.put(msg)
+                else:
+                    self.queue_outgoing_messages.put(msg)
+            except queue.Empty:
+                return
+            except Exception as e:
+                err_str = f"thread_handle_messages_func: {str(e)}"
+                self.log.excep(err_str)
+                return
+
+    def _handle_received_request(self, request, original_request):
+        '''Handles requests popped out of processing queue. Format of 'request'
+        should match format of the 'msg' field of messages received from flexiManage:
+                        {
+                            "message": "add-route",
+                            "params": {
+                                "addr": "9.9.9.9",
+                                "via": "192.168.56.154",
+                                "dev_id":"pci:0000:02:00.0"
+                            }
+                        }
+        :param request:          The request received from flexiManage after
+                                 transformation by fwutils.fix_received_message().
+        :param original_request: The original request received from flexiManage.
+
+        :returns: dict with status code and either error string in case of
+                  failure or dict with fetched info. For example,
+                                {
+                                    "ok":      0
+                                    "message": "failed to assign interface"
+                                }
+        '''
+
+        # We use 'request_cond_var' conditional variable to suspend monitoring
+        # threads as long as handling of the configuration request received from
+        # flexiManage is not finished.
+
+        rt = fwglobals.g.router_threads
+        with rt.request_cond_var:
+            rt.handling_request = True
+
+            if len(rt.thread_names) > 0:
+                self.log.debug(f"_handle_received_request: wait for {rt.thread_names} threads to finish")
+            rt.request_cond_var.wait_for(rt.is_no_active_threads)
+
+            reply = fwglobals.g.handle_request(request, original_request)
+
+            rt.handling_request = False
+            return reply
+
+    def _log_request(self, msg):
+        received_request    = msg['msg']
+        fixed_request       = msg['request']
+        log_fixed_request   = None
+
+        log_prefix = f"seq={msg['seq']}: "
+        if msg.get('jobid'):
+            log_prefix += f"job_id={msg.get('jobid')}: "
+
+        # Some requests like 'add-application' are huge, so we log them into
+        # dedicated file. This is in addition to logging into default file,
+        # where lines are truncated to 4K.
+        #
+        logger = fwglobals.g.get_logger(fixed_request)
+
+        # Save temporary data for logging reply
+        #
+        msg.update({'log_prefix': log_prefix})
+        msg.update({'logger':     logger })
+
+        # Redacting and formatting of huge requests is expensive,
+        # so skip it if the result is not going to be logged anyway.
+        #
+        if not self.log.is_debug_enabled() and not (logger and logger.is_debug_enabled()):
+            return
+
+        log_line = log_prefix + "request\n" + fw_redact.dumps(received_request, sort_keys=True, indent=1)
+        self.log.debug(log_line)
+
+        if received_request != fixed_request:
+            log_fixed_request = "fixed\n" + fw_redact.dumps(fixed_request, sort_keys=True, indent=1)
+            self.log.debug(log_fixed_request)
+
+        if logger:
+            logger.debug(log_line)
+            if log_fixed_request:
+                logger.debug(log_fixed_request)
+
+    def _log_reply(self, msg):
+        request     = msg['request']
+        reply       = msg['reply']
+        logger      = msg['logger']
+        log_prefix  = msg['log_prefix']
+
+        if not self.log.is_debug_enabled() and not (logger and logger.is_debug_enabled()):
+            return  # skip expensive formatting of reply that is not going to be logged
+
+        # Mask huge or security sensitive replies
+        #
+        if re.match('get-device-(logs|packet-traces)|exec', request.get('message',"")):
+            reply = {"ok":1}
+
+        log_line = log_prefix + "reply\n" + fw_redact.dumps(reply, sort_keys=True, indent=1, cls=fwutils.FwJsonEncoder)
+        self.log.debug(log_line)
+        if logger:
+            logger.debug(log_line)

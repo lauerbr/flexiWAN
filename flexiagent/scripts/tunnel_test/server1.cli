@@ -1,0 +1,56 @@
+[
+{
+	"entity": "agent",
+	"message": "start-router",
+	"params": {
+		"default-route": "192.168.0.1",
+	"interfaces": [
+	   {
+		"dev_id": "0000:00:03.00",
+		"addr": "192.168.0.105/24",
+		"gateway": "192.168.0.1",
+		"type":"wan",
+                "useStun": false
+	   },
+	   {
+		"dev_id": "0000:00:08.00",
+		"addr": "10.10.10.1/24",
+		"routing":"ospf",
+		"type":"lan"
+	   }
+	   ]
+	}
+},
+{
+  "entity":  "agent",
+  "message": "add-tunnel",
+  "params": {
+    "src": "192.168.0.105",
+    "dst": "192.168.0.104",
+    "dstPort": "4789",
+    "tunnel-id": 1,
+    "loopback-iface": {
+      "addr":"10.100.0.7/31",
+      "mac":"02:00:27:fd:00:04",
+      "mtu":1360,
+      "routing":"ospf"
+    },
+    "ipsec": {
+      "local-sa": {
+         "spi": 5,
+         "crypto-alg": "aes-cbc-128",
+         "crypto-key": "4a506a794f574265564551694d653768",
+         "integr-alg": "sha-256-128",
+         "integr-key": "4339314b55523947594d6d3547666b45764e6a58"
+         },
+      "remote-sa": {
+         "spi": 4,
+         "crypto-alg": "aes-cbc-128",
+         "crypto-key": "4c0647ee00839b1a885300eb67a58eea",
+         "integr-alg": "sha-256-128",
+         "integr-key": "32501314d47f52d73ea73ef42d7fd930"
+         }
+      }
+    }
+}
+]

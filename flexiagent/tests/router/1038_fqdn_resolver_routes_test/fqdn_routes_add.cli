@@ -1,0 +1,12 @@
+[
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "destinationType": "fqdn",
+    "addr": "fakedomainfakedomain.com",
+    "via": "__INTERFACE_2__tamper__client",
+    "redistributeViaOSPF": true
+  }
+}
+]

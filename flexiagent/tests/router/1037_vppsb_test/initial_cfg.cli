@@ -1,0 +1,28 @@
+[
+{
+  "entity":  "agent",
+  "message": "start-router",
+  "params": {
+    "interfaces": [
+      {
+        "dev_id":  "__INTERFACE_1__dev_id",
+        "addr":    "__INTERFACE_1__addr",
+        "gateway": "__INTERFACE_1__gateway",
+        "type":"wan",
+        "multilink": {
+            "labels": [
+                "green",
+                "blue",
+                "red"]
+        }
+      },
+      {
+        "dev_id":  "__INTERFACE_2__dev_id",
+        "addr":    "172.172.172.172/24",
+        "routing": "ospf",
+        "type":"lan"
+      }
+    ]
+  }
+}
+]

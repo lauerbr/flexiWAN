@@ -1,0 +1,254 @@
+#! /usr/bin/python3
+
+################################################################################
+# flexiWAN SD-WAN software - flexiEdge, flexiManage.
+# For more information go to https://flexiwan.com
+#
+# Copyright (C) 2019  flexiWAN Ltd.
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+################################################################################
+
+import re
+import traceback
+
+from netaddr import IPNetwork
+
+from fwcfg_database import FwCfgDatabase
+
+
+class FwRouterCfg(FwCfgDatabase):
+    """This is requests DB class representation.
+
+    :param db_file: SQLite DB file name.
+    """
+
+    def update(self, request, cmd_list=None, executed=False):
+        # The `start-router` does not conform `add-X`, `remove-X`, `modify-X` format
+        # handled by the superclass update(), so we handle it here.
+        # All the rest are handled by FwCfgDatabase.update().
+        #
+
+        req     = request['message']
+        req_key = None
+        try:
+            if re.match('start-router', req):
+                params  = request.get('params')
+                req_key = self._get_request_key(request)
+                self[req_key] = { 'request' : req , 'params' : params , 'cmd_list' : cmd_list , 'executed' : executed }
+            else:
+                FwCfgDatabase.update(self, request, cmd_list, executed)
+        except KeyError:
+            pass
+        except Exception as e:
+            self.log.error("update(%s) failed: %s, %s" % \
+                        (req_key, str(e), str(traceback.format_exc())))
+            raise Exception('failed to update request database')
+
+    def dump(self, types=None, escape=None, full=False, keys=False):
+        """Dumps router configuration into list of requests
+        """
+        if not types:
+            types = [
+                'start-router',
+                'add-routing-filter',
+                'add-routing-bgp',           # BGP should come after frr routing filter, as it might use them!
+                'add-interface',
+                'add-vxlan-config',
+                'add-switch',
+                'add-tunnel',
+                'add-route',		 # routes should come after tunnels, as they might use them
+                'add-dhcp-config',
+                'add-application',
+                'add-multilink-policy',
+                'add-firewall-policy',
+                'add-lan-nat-policy',
+                'add-ospf',
+                'add-qos-traffic-map',
+                'add-qos-policy',
+                'add-vrrp-group',
+                'add-routing-general',
+            ]
+
+        return FwCfgDatabase.dump(self, types, escape, full, keys)
+
+    def dumps(self, types=None, escape=None, full=False):
+        """Dumps router configuration into printable string.
+
+        :param types:  list of types of configuration requests to be dumped, e.g. [ 'add-interface' , 'add-tunnel' ]
+        :param escape: list of types of configuration requests that should be escaped while dumping
+        :param full:   return requests together with translated commands.
+        """
+        sections = {                # Use stairway to ensure section order in
+                                    # output string created by json.dumps()
+                                    #
+            'start-router':         "======= START COMMAND =======",
+            'add-interface':        "======== INTERFACES ========",
+            'add-switch':           "======== SWITCHES ========",
+            'add-route':            "========= ROUTES =========",
+            'add-tunnel':           "========== TUNNELS ==========",
+            'add-dhcp-config':      "=========== DHCP CONFIG ===========",
+            'add-application':      "============ APPLICATIONS ============",
+            'add-multilink-policy': "============= POLICIES =============",
+            'add-firewall-policy':  "============= FIREWALL POLICY =============",
+            'add-lan-nat-policy':   "============= LAN NAT POLICY =============",
+            'add-ospf':             "============= OSPF =============",
+            'add-vxlan-config':     "============= VXLAN CONFIG =============",
+            'add-routing-bgp':      "============= ROUTING BGP =============",
+            'add-routing-filter':   "============= ROUTING FILTERS =============",
+            'add-qos-traffic-map':  "============= QOS TRAFFIC MAP =============",
+            'add-qos-policy':       "============= QOS POLICY =============",
+            'add-vrrp-group':       "============= VRRP =============",
+            'add-routing-general':  "============= ROUTING CONFIG =============",
+        }
+
+        cfg = self.dump(types=types, escape=escape, full=full, keys=True)
+        return FwCfgDatabase.dumps(self, cfg, sections, full)
+
+    def get_interfaces(self, type=None, dev_id=None, ip=None, device_type=None):
+        if dev_id and isinstance(dev_id, str):
+            # The request key is built out of the dev_id (see
+            # fwtranslate_add_interface.get_request_key()), so fetch
+            # the requested interface directly without scanning database.
+            params = self.get_params('add-interface:' + dev_id)
+            interfaces = [params] if params else []
+        else:
+            interfaces = self.get_requests('add-interface')
+        if not type and not dev_id and not ip and not device_type:
+            return interfaces
+        result = []
+        for params in interfaces:
+            if type and not re.match(type, params['type'], re.IGNORECASE):
+                continue
+            elif dev_id and dev_id != params['dev_id']:
+                continue
+            elif ip and not re.match(ip, params['addr']):
+                continue
+            elif device_type and device_type != params.get('deviceType'):
+                continue
+            result.append(params)
+        return result
+
+    def get_routes(self, addr=None, via=None, dev_id=None):
+        routes = self.get_requests('add-route')
+        if not addr and not via and not dev_id:
+            return routes
+        result = []
+        for params in routes:
+            if addr and params['addr'] != addr:
+                continue
+            elif via and params['via'] != via:
+                continue
+            elif dev_id and 'dev_id' in params and params['dev_id'] != dev_id:
+                continue
+            result.append(params)
+        return result
+
+    def get_routing_filters(self):
+        return self.get_requests('add-routing-filter')
+
+    def get_tunnels(self, routing=None, loopback_ip=None):
+        tunnels = self.get_requests('add-tunnel')
+        if not routing and not loopback_ip:
+            return tunnels
+
+        result = []
+        for tunnel in tunnels:
+            if routing:
+                if 'peer' in tunnel:
+                    tunnel_routing = tunnel.get('peer').get('routing')
+                else:
+                    tunnel_routing = tunnel.get('loopback-iface').get('routing')
+
+                if tunnel_routing != routing:
+                    continue
+            if loopback_ip:
+                if 'peer' in tunnel:
+                    network = IPNetwork(tunnel.get('peer').get('addr'))
+                else:
+                    network = IPNetwork(tunnel.get('loopback-iface').get('addr'))
+
+                if not IPNetwork(loopback_ip) in network:
+                    continue
+            result.append(tunnel)
+        return result
+
+    def get_bgp(self):
+        bgp_req = self.get_requests('add-routing-bgp')
+        # add-routing-bgp is a single request and can't be more than that.
+        # Therefore, convert it from a list to an object or None
+        if not bgp_req:
+            return None
+        return bgp_req[0]
+
+    def get_vrrp_groups(self, dev_id=None):
+        vrrp_groups = self.get_requests('add-vrrp-group')
+        if not dev_id:
+            return vrrp_groups
+        result = []
+        for params in vrrp_groups:
+            if params['devId'] == dev_id:
+                result.append(params)
+        return result
+
+    def get_vxlan_config(self):
+        vxlan_config = self.get_requests('add-vxlan-config')
+        # add-vxlan-config is a single request and can't be more than that.
+        # Therefore, convert it from a list to an object or None
+        if not vxlan_config:
+            return None
+        return vxlan_config[0]
+
+    def get_tunnel(self, tunnel_id):
+        key = 'add-tunnel:%d' % (tunnel_id)
+        return self.get_params(key)
+
+    def get_multilink_policy(self):
+        return self.get_params('add-multilink-policy')
+
+    def get_applications(self):
+        return self.get_params('add-application')
+
+    def get_firewall_policy(self):
+        if 'add-firewall-policy' in self:
+            return self['add-firewall-policy']['params']
+        return None
+
+    def get_qos_traffic_map(self):
+        if 'add-qos-traffic-map' in self:
+            return self['add-qos-traffic-map']['params']
+        return None
+
+    def get_qos_policy(self):
+        if 'add-qos-policy' in self:
+            return self['add-qos-policy']['params']
+        return None
+
+    def get_lan_nat_policy(self):
+        if 'add-lan-nat-policy' in self:
+            return self['add-lan-nat-policy']['params']
+        return None
+
+    def _sync_list_add_modification(self, dumped_request, input_request, output_requests):
+        """The router configuration items with modified parameters are
+        synchronized by 'modify-X' requests. See FwCfgDatabase.get_sync_list().
+        """
+        # Rename requests in input list with 'modify-X'.
+        input_request['message'] = input_request['message'].replace('add-', 'modify-')
+
+    def _sync_list_is_removable(self, dumped_request):
+        """Ignore 'start-router', 'stop-router', etc as they are not configuration items.
+        See FwCfgDatabase.get_sync_list().
+        """
+        return not re.search('(start|stop)-router', dumped_request['message'])

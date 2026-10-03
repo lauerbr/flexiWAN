@@ -1,0 +1,91 @@
+{
+    "company": "flexiwan",
+    "prefix": "fw",
+    "gitlab_repository_name": "flexiwangroup",
+    "debian_repository_url": "https://deb.flexiwan.com/flexiWAN",
+    "agent_server_url": "https://manage.flexiwan.com:443",
+    "components": {
+        "management": "management system",
+        "agent": "agent",
+        "edge": "edge",
+        "edgeUI": "edgeUI"
+    },
+    "services": {
+        "agent": {
+            "name": "flexiwan-router",
+            "description": "flexiWAN Router",
+            "documentation": "https://docs.flexiwan.com/"
+        },
+        "edgeui": {
+            "name": "flexiwan-router-ui",
+            "description": "flexiWAN Router UI",
+            "documentation": "https://docs.flexiwan.com/"
+	    }
+    },
+    "folders": {
+        "data": "/etc/flexiwan/agent",
+        "logs": "/var/log/flexiwan",
+        "installation": "/usr/share/flexiwan"
+    },
+    "filenames": {
+        "agent_conf": "fwagent_conf.yaml",
+        "device_token": "fwagent_info.txt"
+    },
+    "commands": {
+        "agent": {
+            "cmd": "fwagent",
+            "file": "fwagent.py"
+        },
+        "kill": {
+            "cmd": "fwkill",
+            "file": "tools/common/fwkill.py"
+        },
+        "dump": {
+            "cmd": "fwdump",
+            "file": "tools/fwdump.py"
+        },
+        "system_checker": {
+            "cmd": "fwsystem_checker",
+            "file": "tools/system_checker/fwsystem_checker.py"
+        },
+        "core_analyze": {
+            "cmd": "fwcore_analyze",
+            "file": "tools/common/fw_vpp_coredump_analyze.py"
+        },
+        "interface_wizard": {
+            "cmd": "fwinterface_wizard",
+            "file": "edgeui/backend/interface_wizard.py"
+        }
+    },
+    "exec_file_suffix": "fwrun",
+    "pppoe": {
+        "provider_filename": "flexiwan-dsl-provider",
+        "usepeerdns_filename": "0000usepeerdns_flexiwan",
+        "if_name_prefix": "ppp"
+    },
+    "netplan": {
+        "edge_ui_backup_extension": "fworig",
+        "filename_prefix": "flexiwan"
+    },
+    "dhcp_server": {
+        "backup_extension": "fworig"
+    },
+    "rsyslog": {
+        "conf_filename": "46-flexiwan-router.conf"
+    },
+    "logrotate": {
+        "conf_filename": "flexiwan"
+    },
+    "frr": {
+        "config_prefix": "fw"
+    },
+    "package": {
+        "name": "flexiwan-router",
+        "debug_name": "flexiwan-router-dbg",
+        "maintainer_name": "flexiWAN Support",
+        "maintainer_email": "support@flexiwan.com",
+        "homepage": "https://flexiwan.com/",
+        "description": "flexiWAN Router for Network Edge",
+        "debug_description": "flexiWAN Router for Network Edge Debugging Symbols"
+    }
+}

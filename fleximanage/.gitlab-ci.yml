@@ -1,0 +1,59 @@
+image: node:16.15.0
+
+# This folder is cached between builds
+cache:
+  paths:
+  - node_modules/
+
+# CI pipeline stages:
+stages:
+  - build
+  - lint
+  - test
+
+#### Installing npm packages ####
+build:
+  stage: build
+  script:
+    - cd backend
+    - npm ci
+    # ## temp fix: change to npm ci when mongo-express is fixed
+    # - npm install mongo-express --ignore-scripts && npm install
+  artifacts:
+    untracked: true
+    paths:
+      - node_modules/
+
+#### Linting ####
+lint:
+  stage: lint
+  script:
+    - cd backend
+    - npx eslint ./
+
+#### Unit Tests ####
+test_backend:
+  stage: test
+  variables:
+    REDIS_URL: redis://redis:6379
+  services:
+    - redis:latest
+  script:
+   - cd backend
+   - npm test
+  timeout: 5m
+
+
+#### Package security auditing ####
+backend_npm_audit:
+  stage: test
+  script:
+   - cd backend
+   - npm ci audit-ci
+   - npx audit-ci --config ../audit-ci.jsonc >> backend_npm_audit.log
+  timeout: 5m
+  artifacts:
+    when: always
+    paths:
+     - ./backend/backend_npm_audit.log
+    expire_in: 1 days

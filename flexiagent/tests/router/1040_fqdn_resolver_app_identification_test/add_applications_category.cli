@@ -1,0 +1,37 @@
+[
+{
+  "entity": "agent",
+  "message": "add-application",
+  "params": {
+    "applications": [
+      {
+        "name": "fleximanage",
+        "id": "1",
+        "category": "management",
+        "serviceClass": "oam",
+        "importance": "medium",
+        "description": "Echo Protocol",
+        "rules": [
+          {
+            "fqdn": "fakedomainfakedomain.com",
+            "ports": []
+          }
+        ],
+        "modified": false
+      },
+      {
+        "name": "fleximanage-second",
+        "id": "2",
+        "category": "management",
+        "serviceClass": "oam",
+        "importance": "medium",
+        "description": "Echo Protocol",
+        "rules": [
+          { "ip": "11.11.11.11/32", "ports": "" }
+        ],
+        "modified": false
+      }
+    ]
+  }
+}
+]

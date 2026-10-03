@@ -1,0 +1,30 @@
+.vscode/*
+!.vscode/settings.json
+
+# Byte-compiled
+__pycache__/
+*.py[cod]
+pytestdebug.log
+.cache
+*.DS_Store
+
+# Docs build
+/docs/_build
+/docs/_autosummary
+
+
+# Packages
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+#Swap files
+*.sw[g-p]
+
+# Backup files by Notepad++
+*.bak

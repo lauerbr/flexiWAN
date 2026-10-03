@@ -1,0 +1,21 @@
+[
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "1.1.1.1/32",
+    "via": "__INTERFACE_3__gateway",
+    "redistributeViaOSPF": false
+  }
+}
+,
+{
+  "entity": "agent",
+  "message": "add-route",
+  "params": {
+    "addr": "2.2.2.0/24",
+    "via": "__INTERFACE_3__gateway",
+    "redistributeViaOSPF": false
+  }
+}
+]

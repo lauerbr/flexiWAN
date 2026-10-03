@@ -1,0 +1,25 @@
+daemon:
+  standalone: false
+agent:
+  features:
+    stun:
+      enabled: true
+    wan_monitor:
+      enabled: true
+    pppoe:
+      enabled: true
+    autosense:
+      enabled: false
+  requests:
+    ignored: []
+network:
+  debugger_interface:
+    ethernets:
+      enp0s10:
+        dhcp4: false
+        addresses: [192.168.56.171]
+profiling:
+  enabled: false                                       # disabled by default
+  exec_timeout: 30                                     # default: 30 sec
+  print_lines: 10                                            # default: top 10 functions
+

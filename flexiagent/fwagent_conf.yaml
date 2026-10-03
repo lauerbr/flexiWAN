@@ -1,0 +1,27 @@
+agent:
+  server: https://manage.flexiwan.com:443  # default: https://app.flexiwan.com:443
+  token: /etc/flexiwan/agent/token.txt  # default: /etc/flexiwan/agent/token.txt
+  bypass_certificate: false             # default: false
+  # token_allowed_hosts: ["*.flexiwan.com"]  # optional: hosts allowed in server/repo claims of the token (default: any, https required)
+  monitor_wan:
+    monitor_unassigned_interfaces: true # default: true
+    servers: [1.1.1.1, 8.8.8.8]         # default: [1.1.1.1, 8.8.8.8]
+    probe_timeout: 1000                 # default: 1000 msec
+  debug: true                           # default: true
+  daemon_socket: /run/flexiwan/fwagent.sock  # default: /run/flexiwan/fwagent.sock (unix socket only, host:port is ignored)
+  watchdog:
+    deadlock:
+      enabled: true                     # default: true
+    connection:
+      enabled: true                     # default: true
+      router_cfg_window: 240            # default: 240 sec, if 0 - disabled
+  fqdn_resolver:
+    # sets the time (in seconds) between resolution trials of an FQDN
+    resolution_interval: 300            # default: 300 sec, 5 min
+  message_transmission:
+    # sets the delay between long-message chunk transmissions
+    delay_between_chunks: 10            # default: 10 milliseconds
+  vrouter:
+    api_read_timeout: 30                # default: 30 sec
+edgeui:
+  enabled: true                         # default or omit: true
